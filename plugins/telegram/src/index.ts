@@ -5,9 +5,8 @@ import { loadPluginState, loadTopics, saveBotToken, savePairedChat, saveTopics }
 import { messageToPrompt } from "./inbound.ts";
 import { acquireInstanceLock, InstanceLockedError } from "./lock.ts";
 import { generatePairingCode, PairingTimeoutError, waitForPairing } from "./pairing.ts";
-import { ApprovalGate, type ApprovalDecision, type ApprovalSurface } from "./approvals.ts";
 import { TelegramTurnStream, TurnRenderer } from "./stream.ts";
-import { createSettleCell, makeTelegramApprovalSurface, makeTuiApprovalSurface } from "./surfaces.ts";
+import { escapeHtml } from "./text.ts";
 import { TopicRouter, type TopicStore } from "./topics.ts";
 
 type BridgeStatus =
@@ -17,12 +16,6 @@ type BridgeStatus =
   | { state: "error"; detail: string };
 
 const PAIRING_TIMEOUT_MS = 120_000;
-
-function decisionLabel(decision: ApprovalDecision): string {
-  if (decision === "approve") return "✅ Approved";
-  if (decision === "always") return "🔓 Always allowed";
-  return "❌ Denied";
-}
 
 export default function telegramExtension(pi: ExtensionAPI): void {
   pi.setLabel("Telegram");
@@ -39,7 +32,6 @@ export default function telegramExtension(pi: ExtensionAPI): void {
   let topicRouter: TopicRouter | undefined;
   let turnStream: TelegramTurnStream | undefined;
   let renderer: TurnRenderer | undefined;
-  let approvalGate: ApprovalGate | undefined;
   let currentSessionId: string | undefined;
 
   const subscribe = (listener: (update: TelegramUpdate) => unknown) => {
@@ -117,7 +109,6 @@ export default function telegramExtension(pi: ExtensionAPI): void {
     };
     topicRouter = await TopicRouter.connect(api, chatId, store);
     renderer = new TurnRenderer();
-    approvalGate = new ApprovalGate();
     turnStream = new TelegramTurnStream(
       api,
       chatId,
@@ -172,7 +163,6 @@ export default function telegramExtension(pi: ExtensionAPI): void {
   pi.on("session_switch", async (_event, ctx) => {
     currentSessionId = ctx.sessionManager.getSessionId();
     renderer?.reset();
-    approvalGate = new ApprovalGate();
     await ensureSessionTopic();
   });
 
@@ -207,52 +197,29 @@ export default function telegramExtension(pi: ExtensionAPI): void {
     for (const action of renderer.turnEnd()) turnStream.push(action);
   });
 
-  // The plugin-owned approval gate. Requires tools.approvalMode: yolo — otherwise the
-  // built-in prompt fires right after ours and every call double-prompts.
-  pi.on("tool_call", async (event, ctx) => {
-    if (!approvalGate) return;
+  // Approvals are NOT gated by this plugin: yolo means trust, and built-in modes prompt
+  // at the terminal. Approval events are mirrored read-only so the phone stays informed.
+  // Interactive remote approval needs the upstream dialog-seam PR (decision-returning handlers).
+  pi.on("tool_approval_requested", async event => {
+    if (!botApi || pairedChatId === undefined) return;
+    const threadId = currentSessionId ? topicRouter?.threadFor(currentSessionId) : undefined;
+    const reason = event.reason ? `<p>${escapeHtml(event.reason)}</p>` : "";
+    await botApi
+      .sendRichMessage(
+        pairedChatId,
+        { html: `<p>⚠️ <b>Approval requested at the terminal</b></p><pre>${escapeHtml(event.toolName)}</pre>${reason}` },
+        { threadId },
+      )
+      .catch(error => reportError("Telegram approval mirror failed", error));
+  });
 
-    // Shared settle cell: whichever verdict lands first (a surface answer or the gate's
-    // own timeout) becomes the label the Telegram card shows — so phone and terminal
-    // can never disagree about a call's fate, and no card leaks its listener.
-    const settleCell = createSettleCell();
-    const surfaces: Array<ApprovalSurface | undefined> = [];
-
-    if (botApi && pairedChatId !== undefined) {
-      const api = botApi;
-      const chatId = pairedChatId;
-      const telegram = makeTelegramApprovalSurface({
-        api,
-        chatId,
-        threadId: () => (currentSessionId ? topicRouter?.threadFor(currentSessionId) : undefined),
-        subscribe,
-        settleCell,
-      });
-      surfaces.push(async request => {
-        const decision = await telegram(request);
-        settleCell.settle(decisionLabel(decision));
-        return decision;
-      });
-    }
-    if (ctx.hasUI) {
-      const tui = makeTuiApprovalSurface(ctx.ui);
-      surfaces.push(async request => {
-        const decision = await tui(request);
-        settleCell.settle(decisionLabel(decision));
-        return decision;
-      });
-    }
-
-    const verdict = await approvalGate.decide(
-      { toolName: event.toolName, args: "input" in event ? event.input : undefined },
-      surfaces,
-    );
-    if (settleCell.label === undefined) {
-      settleCell.settle(
-        verdict?.block ? (verdict.reason?.includes("timed out") ? "⌛ Timed out — treated as denied" : "❌ Denied") : "✅ Resolved (allowed)",
-      );
-    }
-    return verdict;
+  pi.on("tool_approval_resolved", async event => {
+    if (!botApi || pairedChatId === undefined) return;
+    const threadId = currentSessionId ? topicRouter?.threadFor(currentSessionId) : undefined;
+    const verdict = event.approved ? "✅ Approved" : "❌ Denied";
+    await botApi
+      .sendRichMessage(pairedChatId, { html: `<p>${verdict} — <b>${escapeHtml(event.toolName)}</b></p>` }, { threadId })
+      .catch(error => reportError("Telegram approval mirror failed", error));
   });
 
   pi.registerCommand("telegram-setup", {

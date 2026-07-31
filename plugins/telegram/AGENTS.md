@@ -13,8 +13,6 @@ approve tool calls remotely.
 - `src/index.ts` — extension wiring: bootstrap, `/telegram-setup`, `/telegram-status`, event routing
 - `src/stream.ts` — turn renderer (pure) + paced Telegram driver (draft coalescing, chunking)
 - `src/topics.ts` — session↔topic router with runtime Threaded-Mode detection
-- `src/approvals.ts` — plugin-owned approval gate (surface race, always-allow memory)
-- `src/surfaces.ts` — Telegram card + TUI dialog approval surfaces
 - `src/inbound.ts` — Telegram message → prompt conversion (text, photos)
 - `prototype/run.ts` — live UI prototype against a real bot
 
@@ -35,9 +33,10 @@ approve tool calls remotely.
   draft-only, never persists.
 - Topics are progressive enhancement: gate on `getMe().has_topics_enabled`; without it, post
   everything in the main chat (flat mode).
-- The approval gate runs inside `tool_call` before the built-in gate — requires
-  `tools.approvalMode: yolo` or every call double-prompts. No surfaces → defer to built-in.
-  A late tap must show the settled verdict, never the tapped one.
+- Approvals are NOT gated: yolo = trust (no approval UI anywhere); built-in modes prompt at
+  the terminal and are mirrored to Telegram read-only via `tool_approval_*` events.
+  Interactive remote approval requires the upstream dialog-seam PR — do not resurrect the
+  deleted gate (see git history) until it lands.
 - The `.omp/config.yml` YAML round-trip mirrors `plugins/setup-skills`; if a third plugin
   needs it, extract a shared package instead of copying again.
 - OMP API truth: `.reference/oh-my-pi` (gitignored clone). The installed npm version is the
