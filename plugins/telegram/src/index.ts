@@ -198,14 +198,14 @@ export default function telegramExtension(pi: ExtensionAPI): void {
   });
 
   // Advisor cards arrive as custom transcript messages (role "custom", customType "advisor")
-  // and are mirrored read-only. Aborts can replay the same card — dedup on timestamp+content.
+  // and are mirrored read-only. Preserved cards fire start+end, steered cards may fire only
+  // start — listen on both and dedup on timestamp+content so each card mirrors exactly once.
   const mirroredAdvisories = new Set<string>();
-  pi.on("message_end", async event => {
-    const message = event.message;
+  const mirrorAdvisorCard = async (message: { role: string; customType?: unknown; content?: unknown; timestamp?: unknown }): Promise<void> => {
     if (message.role !== "custom" || message.customType !== "advisor") return;
     if (!botApi || pairedChatId === undefined) return;
     if (typeof message.content !== "string" || message.content.length === 0) return;
-    const key = `${message.timestamp}:${message.content}`;
+    const key = `${String(message.timestamp)}:${message.content}`;
     if (mirroredAdvisories.has(key)) return;
     if (mirroredAdvisories.size > 200) mirroredAdvisories.clear();
     mirroredAdvisories.add(key);
@@ -214,7 +214,9 @@ export default function telegramExtension(pi: ExtensionAPI): void {
     await botApi
       .sendRichMessage(pairedChatId, { html: `<p>🧭 <b>Advisor</b></p><blockquote>${body}</blockquote>` }, { threadId })
       .catch(error => reportError("Telegram advisor mirror failed", error));
-  });
+  };
+  pi.on("message_start", event => void mirrorAdvisorCard(event.message));
+  pi.on("message_end", event => void mirrorAdvisorCard(event.message));
 
   // Approvals are NOT gated by this plugin: yolo means trust, and built-in modes prompt
   // at the terminal. Approval events are mirrored read-only so the phone stays informed.
