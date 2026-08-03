@@ -10,7 +10,8 @@ approve tool calls remotely.
 - `src/config.ts` — project config (`.omp/config.yml`) + user-global token store
 - `src/pairing.ts` — one-time-code pairing handshake
 - `src/lock.ts` — single-consumer instance lock
-- `src/index.ts` — extension wiring: bootstrap, `/telegram-setup`, `/telegram-status`, event routing
+- `src/index.ts` — extension wiring: bootstrap, `/telegram-setup`, `/telegram-status`, event routing,
+  read-only mirrors (approvals, advisor cards)
 - `src/stream.ts` — turn renderer (pure) + paced Telegram driver (draft coalescing, chunking)
 - `src/topics.ts` — session↔topic router with runtime Threaded-Mode detection
 - `src/inbound.ts` — Telegram message → prompt conversion (text, photos)

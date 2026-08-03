@@ -197,6 +197,25 @@ export default function telegramExtension(pi: ExtensionAPI): void {
     for (const action of renderer.turnEnd()) turnStream.push(action);
   });
 
+  // Advisor cards arrive as custom transcript messages (role "custom", customType "advisor")
+  // and are mirrored read-only. Aborts can replay the same card — dedup on timestamp+content.
+  const mirroredAdvisories = new Set<string>();
+  pi.on("message_end", async event => {
+    const message = event.message;
+    if (message.role !== "custom" || message.customType !== "advisor") return;
+    if (!botApi || pairedChatId === undefined) return;
+    if (typeof message.content !== "string" || message.content.length === 0) return;
+    const key = `${message.timestamp}:${message.content}`;
+    if (mirroredAdvisories.has(key)) return;
+    if (mirroredAdvisories.size > 200) mirroredAdvisories.clear();
+    mirroredAdvisories.add(key);
+    const threadId = currentSessionId ? topicRouter?.threadFor(currentSessionId) : undefined;
+    const body = escapeHtml(message.content.length > 4000 ? `${message.content.slice(0, 4000)}…` : message.content).replace(/\n/g, "<br/>");
+    await botApi
+      .sendRichMessage(pairedChatId, { html: `<p>🧭 <b>Advisor</b></p><blockquote>${body}</blockquote>` }, { threadId })
+      .catch(error => reportError("Telegram advisor mirror failed", error));
+  });
+
   // Approvals are NOT gated by this plugin: yolo means trust, and built-in modes prompt
   // at the terminal. Approval events are mirrored read-only so the phone stays informed.
   // Interactive remote approval needs the upstream dialog-seam PR (decision-returning handlers).
