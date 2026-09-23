@@ -9,7 +9,11 @@ import {
   resetActiveSkillsForTests,
   setActiveSkills,
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import setupSkillsExtension, { filterDisabledSkillsFromSystemPrompt } from "../src/index";
+import setupSkillsExtension, {
+  filterDisabledSkillsFromSystemPrompt,
+  isSessionWriteConflict,
+  reloadSessionAfterIdle,
+} from "../src/index";
 
 const tempRoots: string[] = [];
 const previousHomes: Array<string | undefined> = [];
@@ -111,6 +115,7 @@ function registeredSetupSkillsCommand(): RegisteredCommand {
 
 type MockCommandContextOptions = {
   waitForIdle?: () => Promise<void>;
+  reload?: () => Promise<void>;
 };
 
 function mockCommandContext(
@@ -142,6 +147,7 @@ function mockCommandContext(
     },
     reload: async () => {
       calls.reload += 1;
+      await options.reload?.();
     },
     ui: {
       custom: async <T>() => {
@@ -287,6 +293,49 @@ describe("setup-skills command", () => {
       "Skills\n<skills>\n- alpha: Alpha project skill\n</skills>\nRules",
       '<skills>\n<skill name="alpha">\nAlpha project skill\n</skill>\n</skills>',
     ]);
+  });
+
+  test("retries session reload after an OMP write-conflict, then warns if it keeps racing", async () => {
+    const project = await makeTempProject();
+    await writeProjectConfig(project, {
+      skills: isolatedSkillsConfig(),
+    });
+    const command = registeredSetupSkillsCommand();
+    const conflict = new Error(
+      "Session file changed before rewrite: session.jsonl (expected 739218 bytes, found 740341 bytes).",
+    );
+    let reloadAttempts = 0;
+    const { ctx, notifications, calls } = mockCommandContext(project, new Set(["alpha"]), {
+      reload: async () => {
+        reloadAttempts += 1;
+        throw conflict;
+      },
+    });
+
+    await command.handler("", ctx);
+
+    expect(isSessionWriteConflict(conflict)).toBe(true);
+    expect(reloadAttempts).toBe(3);
+    expect(calls).toEqual({ waitForIdle: 3, custom: 1, reload: 3 });
+    expect(notifications.at(-1)).toEqual({
+      message:
+        "Skills config saved, but OMP could not rewrite the session file. Restart OMP to apply skill commands. Session file changed before rewrite: session.jsonl (expected 739218 bytes, found 740341 bytes).",
+      type: "warning",
+    });
+  });
+
+  test("reloadSessionAfterIdle succeeds after a single write-conflict", async () => {
+    let reloads = 0;
+    await reloadSessionAfterIdle({
+      waitForIdle: async () => {},
+      reload: async () => {
+        reloads += 1;
+        if (reloads === 1) {
+          throw new Error("SessionWriteConflictError: Session file changed before rewrite");
+        }
+      },
+    });
+    expect(reloads).toBe(2);
   });
 
   test("leaves project config and session reload untouched when skill selection is cancelled", async () => {

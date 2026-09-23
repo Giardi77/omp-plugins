@@ -67,7 +67,7 @@ It updates only the `skills` section:
 - default mode uses `skills.ignoredSkills` to disable unchecked skills
 - existing allowlist mode uses `skills.includeSkills` to keep only checked skills
 
-After saving, it reloads the current OMP session when the agent is idle so the selected skills become active without blocking mid-turn selection.
+After saving, it reloads the current OMP session when the agent is idle so the selected skills become active without blocking mid-turn selection. If OMP appends to the session file during that reload, the config is still saved; restart OMP if skill commands do not update.
 
 ## Uninstall
 

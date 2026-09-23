@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { loadSkills, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { loadProjectSkillsState, writeProjectSkillsSelection } from "./project-skills";
 import { runProjectSkillsSelector } from "./selector";
@@ -32,6 +32,31 @@ export function filterDisabledSkillsFromSystemPrompt(
 function formatSavedSummary(configPath: string, enabledCount: number, totalCount: number): string {
   const disabledCount = Math.max(0, totalCount - enabledCount);
   return `Updated ${configPath} (${enabledCount} enabled, ${disabledCount} disabled). Reloading skills when the agent is idle...`;
+}
+
+export function isSessionWriteConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Session file changed before rewrite") || message.includes("SessionWriteConflictError");
+}
+
+export async function reloadSessionAfterIdle(
+  ctx: Pick<ExtensionCommandContext, "reload" | "waitForIdle">,
+  attempts = 3,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    await ctx.waitForIdle();
+    try {
+      await ctx.reload();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isSessionWriteConflict(error) || attempt === attempts - 1) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
 }
 
 export default function setupSkillsExtension(pi: ExtensionAPI): void {
@@ -81,14 +106,26 @@ export default function setupSkillsExtension(pi: ExtensionAPI): void {
       disabledSkillNames = new Set(state.rows.filter(row => !selectedNames.has(row.name)).map(row => row.name));
 
       ctx.ui.notify(formatSavedSummary(state.configPath, selectedNames.size, state.rows.length), "info");
-      await ctx.waitForIdle();
 
       const refreshed = await loadSkills({
         ...nextSkills,
         cwd: state.projectRoot,
       });
       setActiveSkills(refreshed.skills);
-      await ctx.reload();
+
+      try {
+        await reloadSessionAfterIdle(ctx);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (isSessionWriteConflict(error)) {
+          ctx.ui.notify(
+            `Skills config saved, but OMP could not rewrite the session file. Restart OMP to apply skill commands. ${message}`,
+            "warning",
+          );
+          return;
+        }
+        ctx.ui.notify(message, "error");
+      }
     },
   });
 }
