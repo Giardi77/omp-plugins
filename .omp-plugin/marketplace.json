@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Giardi77's OMP plugin marketplace.",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "omp-setup-skills-extension",
       "description": "Select enabled skills for an OMP project.",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "source": "./setup-skills",
       "author": {
         "name": "Giardi77"

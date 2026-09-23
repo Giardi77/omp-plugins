@@ -3,6 +3,10 @@ import { loadSkills, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibi
 import { loadProjectSkillsState, writeProjectSkillsSelection } from "./project-skills";
 import { runProjectSkillsSelector } from "./selector";
 
+type SkillRefreshableCommandContext = ExtensionCommandContext & {
+  refreshSkills?: () => Promise<void>;
+};
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -37,6 +41,12 @@ function formatSavedSummary(configPath: string, enabledCount: number, totalCount
 export function isSessionWriteConflict(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("Session file changed before rewrite") || message.includes("SessionWriteConflictError");
+}
+
+export function hasRefreshSkills(
+  ctx: ExtensionCommandContext,
+): ctx is SkillRefreshableCommandContext & { refreshSkills: () => Promise<void> } {
+  return typeof (ctx as SkillRefreshableCommandContext).refreshSkills === "function";
 }
 
 export async function reloadSessionAfterIdle(
@@ -107,13 +117,18 @@ export default function setupSkillsExtension(pi: ExtensionAPI): void {
 
       ctx.ui.notify(formatSavedSummary(state.configPath, selectedNames.size, state.rows.length), "info");
 
-      const refreshed = await loadSkills({
-        ...nextSkills,
-        cwd: state.projectRoot,
-      });
-      setActiveSkills(refreshed.skills);
-
       try {
+        if (hasRefreshSkills(ctx)) {
+          await ctx.waitForIdle();
+          await ctx.refreshSkills();
+          return;
+        }
+
+        const refreshed = await loadSkills({
+          ...nextSkills,
+          cwd: state.projectRoot,
+        });
+        setActiveSkills(refreshed.skills);
         await reloadSessionAfterIdle(ctx);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -11,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import setupSkillsExtension, {
   filterDisabledSkillsFromSystemPrompt,
+  hasRefreshSkills,
   isSessionWriteConflict,
   reloadSessionAfterIdle,
 } from "../src/index";
@@ -116,6 +117,7 @@ function registeredSetupSkillsCommand(): RegisteredCommand {
 type MockCommandContextOptions = {
   waitForIdle?: () => Promise<void>;
   reload?: () => Promise<void>;
+  refreshSkills?: () => Promise<void>;
 };
 
 function mockCommandContext(
@@ -129,6 +131,7 @@ function mockCommandContext(
     waitForIdle: number;
     custom: number;
     reload: number;
+    refreshSkills: number;
   };
 } {
   const notifications: Notification[] = [];
@@ -136,6 +139,7 @@ function mockCommandContext(
     waitForIdle: 0,
     custom: 0,
     reload: 0,
+    refreshSkills: 0,
   };
 
   const ctx = {
@@ -149,6 +153,14 @@ function mockCommandContext(
       calls.reload += 1;
       await options.reload?.();
     },
+    ...(options.refreshSkills
+      ? {
+          refreshSkills: async () => {
+            calls.refreshSkills += 1;
+            await options.refreshSkills?.();
+          },
+        }
+      : {}),
     ui: {
       custom: async <T>() => {
         calls.custom += 1;
@@ -188,7 +200,7 @@ describe("setup-skills command", () => {
 
     await command.handler("", ctx);
 
-    expect(calls).toEqual({ waitForIdle: 1, custom: 1, reload: 1 });
+    expect(calls).toEqual({ waitForIdle: 1, custom: 1, reload: 1, refreshSkills: 0 });
     const written = YAML.parse(await Bun.file(configPath).text()) as Record<string, unknown>;
     const writtenSkills = written.skills as Record<string, unknown>;
     expect(written.model).toBe("claude-sonnet");
@@ -251,7 +263,7 @@ describe("setup-skills command", () => {
     if (assertionError !== undefined) {
       throw assertionError;
     }
-    expect(calls).toEqual({ waitForIdle: 1, custom: 1, reload: 1 });
+    expect(calls).toEqual({ waitForIdle: 1, custom: 1, reload: 1, refreshSkills: 0 });
   });
 
   test("removes unchecked skills from the active agent skill registry", async () => {
@@ -316,7 +328,7 @@ describe("setup-skills command", () => {
 
     expect(isSessionWriteConflict(conflict)).toBe(true);
     expect(reloadAttempts).toBe(3);
-    expect(calls).toEqual({ waitForIdle: 3, custom: 1, reload: 3 });
+    expect(calls).toEqual({ waitForIdle: 3, custom: 1, reload: 3, refreshSkills: 0 });
     expect(notifications.at(-1)).toEqual({
       message:
         "Skills config saved, but OMP could not rewrite the session file. Restart OMP to apply skill commands. Session file changed before rewrite: session.jsonl (expected 739218 bytes, found 740341 bytes).",
@@ -338,6 +350,39 @@ describe("setup-skills command", () => {
     expect(reloads).toBe(2);
   });
 
+  test("prefers ctx.refreshSkills when present and does not rediscover or reload the session", async () => {
+    const project = await makeTempProject();
+    await writeProjectConfig(project, {
+      skills: isolatedSkillsConfig(),
+    });
+    setActiveSkills([
+      {
+        name: "alpha",
+        description: "Alpha project skill",
+        filePath: path.join(project, ".omp", "skills", "alpha", "SKILL.md"),
+        baseDir: path.join(project, ".omp", "skills", "alpha"),
+        source: "native:project",
+      },
+      {
+        name: "beta",
+        description: "Beta project skill",
+        filePath: path.join(project, ".omp", "skills", "beta", "SKILL.md"),
+        baseDir: path.join(project, ".omp", "skills", "beta"),
+        source: "native:project",
+      },
+    ]);
+    const command = registeredSetupSkillsCommand();
+    const { ctx, calls } = mockCommandContext(project, new Set(["alpha"]), {
+      refreshSkills: async () => {},
+    });
+
+    expect(hasRefreshSkills(ctx)).toBe(true);
+    await command.handler("", ctx);
+
+    expect(calls).toEqual({ waitForIdle: 1, custom: 1, reload: 0, refreshSkills: 1 });
+    expect(getActiveSkills().map(skill => skill.name)).toEqual(["alpha", "beta"]);
+  });
+
   test("leaves project config and session reload untouched when skill selection is cancelled", async () => {
     const project = await makeTempProject();
     const configPath = path.join(project, ".omp", "config.yml");
@@ -355,7 +400,7 @@ describe("setup-skills command", () => {
 
     await command.handler("", ctx);
 
-    expect(calls).toEqual({ waitForIdle: 0, custom: 1, reload: 0 });
+    expect(calls).toEqual({ waitForIdle: 0, custom: 1, reload: 0, refreshSkills: 0 });
     expect(notifications).toEqual([{ message: "Project skills unchanged.", type: "info" }]);
     expect(await Bun.file(configPath).text()).toBe(originalConfig);
   });
