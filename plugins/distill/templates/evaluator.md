@@ -84,11 +84,13 @@ sentence doing work:
    the edit, and what it printed or returned. One clause, quoted the way it happened. This is
    what makes the lesson believable and findable.
 3. **The instruction** — what to do instead, stated so it can be followed without you.
-4. **Why it must be followed** — the cost of getting it wrong, in as few words as it takes.
+
+Three parts, in that order. The cost of getting it wrong is not a fourth: it belongs in
+`rationale`, where the reviewer reads it and the next session's context never pays for it.
 
 Bad: "A test command issued from the repo root finds no tests and reports an empty pass,
 which looks like success but proves nothing. Change into packages/core before running the
-tests, so a zero-test run is never mistaken for a green suite."
+tests." — a rule with nothing to recognise it by, and the cost padded on the end.
 
 Good: "Running the suite from the repo root finds nothing and reports a pass, so a green run
 proves nothing (`bun test` at the root printed `0 pass — no tests found`). Run it from
@@ -99,9 +101,9 @@ command, and what it printed, so the next agent recognises the trap when it is s
 it. Keep it short: the whole lesson — problem, instance, instruction, why — fits in a few
 lines, and everything that is not one of those four parts is noise.
 
-The `rationale` field is not part of the lesson a future agent reads. It is your note to the
-reviewer: why this is worth keeping at all, and what in the session tells you it is true.
-Never spend it on why you chose this kind or this target — the write itself shows that.
+The `rationale` field is not part of the lesson a future agent reads. It is what the reviewer
+reads: why the fix must be applied — the cost of skipping it — and what in this session tells
+you it is true. Never spend it on which kind or target you chose; the write itself shows that.
 
 ## What you see
 

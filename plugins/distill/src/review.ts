@@ -364,6 +364,14 @@ export class ReviewWindow implements Component {
 
     lines.push("", ...wrapTextWithAnsi(lesson.body, width));
 
+    if (lesson.rationale.trim() !== "") {
+      lines.push(
+        "",
+        muted(theme, "why keep it:"),
+        ...wrapTextWithAnsi(lesson.rationale, width).map(line => color(theme, "dim", line)),
+      );
+    }
+
     if (lesson.citations.length > 0) {
       const quotes: string[] = [];
       for (const citation of lesson.citations) {

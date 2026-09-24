@@ -214,6 +214,10 @@ describe("ReviewWindow", () => {
     expect(rendered).toContain("skill · target: target-one");
     expect(rendered).toContain("Title one");
     expect(rendered).toContain("Body of one.");
+    // The rationale is invisible everywhere else — the surface gets title and body — so review is
+    // the only place the reviewer can read why the lesson is worth keeping.
+    expect(rendered).toContain("why keep it:");
+    expect(rendered).toContain("the same mistake came back three times");
     expect(rendered).toContain("trace-one#record-1");
     expect(rendered).toContain("Excerpt of one.");
     expect(rendered).toContain("## Lesson — 2026-09-24");

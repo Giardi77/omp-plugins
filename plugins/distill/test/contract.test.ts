@@ -81,8 +81,10 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(".omp/distill/lessons/");
     // A lesson that reads well is the point: the body's four parts, in order, and the cap.
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the problem (what goes wrong)");
-    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the cost of ignoring it");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(`at most ${MAX_LESSON_BODY_CHARS} characters`);
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("why the fix must be applied");
+    // Grounding: the citations have to be the moment the lesson came from.
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("citations do not show it is not grounded");
   });
 
   test("every surface OMP offers is a kind, and each kind checks its target", () => {
