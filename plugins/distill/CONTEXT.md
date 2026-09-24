@@ -72,9 +72,11 @@ version bump (ADR-0008).
 _Avoid_: rubric, prompt, template, schema
 
 **Payload**:
-The bytes distill hands the evaluator for one evaluation: the session's traces — the parent's and its
-subagents' — and nothing else.
-_Avoid_: digest, prompt, projection
+The bytes distill hands the evaluator for one evaluation: the traces that run was given — the session's
+parent and subagent traces, or the subset a packed or split bundle left it — and nothing else. It is a
+bounded rendering rather than a transcript dump: tool results arrive as their first line and size, and
+each trace names the transcript file its records came from.
+_Avoid_: prompt, projection
 
 **Scan**:
 The explicit, operator-triggered act that selects sessions and runs the evaluator over them, one
@@ -82,7 +84,9 @@ session at a time.
 _Avoid_: batch, crawl, job
 
 **Evaluation**:
-One evaluator run over one session's traces, yielding zero or more proposed lessons.
+One evaluator run over the traces it was given, yielding zero or more proposed lessons. A session's
+traces are covered by one or more evaluations: a bundle larger than the evaluator's model is split or
+packed, and each run records its own outcome against the traces it carried.
 _Avoid_: job, scoring, pass
 
 **Evaluator**:
