@@ -38,3 +38,8 @@ store for a lesson that already denied the same proposal — belong to the descr
 `propose_lessons`, which leaves the project's `evaluator.md` holding taste alone. Citations are
 qualified as `trace:record`, because record ids are unique within one session file and collide across
 the traces a single payload bundles.
+
+**Amended 2026-09-25**: the surface has six names now — `get_trace` (ADR-0013) and `tasks_completed`
+joined it. A run no longer ends by going quiet: it ends through `tasks_completed`, which refuses until
+every trace in the payload has been read to its last record (ADR-0017). The answer contract itself is
+unchanged — `propose_lessons` is still where the judgement is recorded.

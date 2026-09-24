@@ -56,7 +56,9 @@ The evaluator is handed an **inventory** of the session's traces — each one's 
 and transcript file — and reads the records itself with `get_trace`: a section at a time, by range, by
 pattern, or with a `jq` query over that trace's records. Sections render prompts, assistant text and
 tool calls in full (capped per record) and tool results as their first line plus size; cited evidence
-is still extracted verbatim from the full record.
+is still extracted verbatim from the full record. It answers through `propose_lessons` and ends the
+run with `tasks_completed`, which is refused until every trace has been read to its last record
+(ADR-0017) — so a run that goes quiet is an unfinished one, not a finished one.
 
 One session is one evaluation: the parent trace and its subagents in a single run. Nothing is ever
 truncated — a payload the model refuses fails loudly, reports what the provider said

@@ -14,8 +14,8 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   section of one of them (range or pattern), and `excerptFor` renders the cited record in full
 - `src/jq.ts` — the `jq` runner behind `get_trace`: one argv element, NDJSON in, empty module path,
   capped output, killed on timeout
-- `src/contract.ts` — the `propose_lessons` schema/description, answer validation, citation
-  resolution, lesson identity
+- `src/contract.ts` — the tool descriptions and schemas (`propose_lessons`, `get_trace`,
+  `tasks_completed`), answer validation, citation resolution, lesson identity
 - `src/diff.ts` — what approving a lesson writes, as diff rows: a create, an append, or a trim, with
   the file's own line numbers and neighbours — no diff algorithm, because nothing is ever replaced
 - `src/job.ts` — a scan as a background daemon: the journal `/distill status` reads, the runner's
@@ -65,7 +65,7 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   which registers no command and leaves `/distill` falling through to the model (ADR-0011). The
   managed-skill rules and the thinking selectors the host does not export live in `src/skill-rules.ts`
   and `src/thinking.ts`; keep each faithful to the host module named in its header.
-- Keep the mechanical instructions in the `propose_lessons` description, never in the project's
+- Keep the mechanical instructions in the tool descriptions, never in the project's
   `evaluator.md` (D15): the file the operator edits must not go stale against the loop.
 - The project-root walk-up and the YAML config round-trip are mirrored from `plugins/setup-skills`
   and `plugins/telegram` rather than shared: a marketplace plugin installs standalone, so a

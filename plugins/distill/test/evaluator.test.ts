@@ -6,11 +6,12 @@ import {
   assertToolSurface,
   compareVersions,
   EVALUATOR_TOOL_NAMES,
-  type ProposeLessonsTool,
+  type EvaluatorTool,
   runEvaluation,
   sealedSessionOptions,
   ToolSurfaceMismatch,
 } from "../src/evaluator";
+import { loadTraceBundle } from "../src/bundle";
 import { loadSession, resolveBranch } from "../src/store";
 import { buildBundle, type TraceBundle } from "../src/trace";
 import { isRecord } from "../src/util";
@@ -55,6 +56,8 @@ const goodLesson = {
 };
 
 interface ScriptedCall {
+  /** Which of the run's tools to call; `propose_lessons` unless named. */
+  tool?: string;
   params: unknown;
   /** When set, the call must fail with a message containing this. */
   errorContains?: string;
@@ -69,6 +72,11 @@ interface Script {
   settled?: { stopReason?: string; errorMessage?: string };
 }
 
+/** The fixture's parent trace, and the two calls that make a scripted run a complete one. */
+const TRACE = "abc12345";
+const readTail: ScriptedCall = { tool: "get_trace", params: { trace: TRACE, from: 1 } };
+const finish: ScriptedCall = { tool: "tasks_completed", params: {} };
+
 /** A fake injected SDK whose session plays a scripted transcript. */
 function scriptedSdk(script: Script) {
   const created: CreateAgentSessionOptions[] = [];
@@ -80,9 +88,10 @@ function scriptedSdk(script: Script) {
       prompted.push(text);
       if (script.promptError) throw script.promptError;
       const options = created[created.length - 1];
-      const tool = options?.customTools?.find(candidate => isRecord(candidate) && candidate.name === "propose_lessons");
-      if (!isProposeTool(tool)) throw new Error("the sealed options carried no propose_lessons tool");
       for (const call of script.calls ?? []) {
+        const name = call.tool ?? "propose_lessons";
+        const tool = options?.customTools?.find(candidate => isRecord(candidate) && candidate.name === name);
+        if (!isTool(tool)) throw new Error(`the sealed options carried no ${name} tool`);
         let failure: string | undefined;
         try {
           await tool.execute("call-id", call.params);
@@ -117,7 +126,7 @@ function scriptedSdk(script: Script) {
   return { sdk, created, prompted, disposedCount: () => disposed };
 }
 
-function isProposeTool(value: unknown): value is ProposeLessonsTool {
+function isTool(value: unknown): value is EvaluatorTool {
   return isRecord(value) && typeof value.name === "string" && typeof value.execute === "function";
 }
 
@@ -156,7 +165,7 @@ describe("sealing", () => {
     expect(options.cwd).toBe("/work/alpha");
     expect(options.systemPrompt).toEqual(["# taste"]);
     expect(options.restrictToolNames).toBe(true);
-    expect(options.toolNames).toEqual(["read", "glob", "grep", "get_trace", "propose_lessons"]);
+    expect(options.toolNames).toEqual(["read", "glob", "grep", "get_trace", "propose_lessons", "tasks_completed"]);
     expect(options.allowRestrictedCustomTools).toBe(true);
     expect(options.disableExtensionDiscovery).toBe(true);
     expect(options.skills).toEqual([]);
@@ -177,15 +186,17 @@ describe("sealing", () => {
   });
 
   test("the tool surface is compared, not trusted", () => {
-    expect(() => assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons"])).not.toThrow();
+    expect(() => assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons", "tasks_completed"])).not.toThrow();
 
-    expect(() => assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons", "write"])).toThrow(ToolSurfaceMismatch);
+    expect(() =>
+      assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons", "tasks_completed", "write"]),
+    ).toThrow(ToolSurfaceMismatch);
     try {
       assertToolSurface(["read", "glob", "write"]);
     } catch (error) {
       const mismatch = error as ToolSurfaceMismatch;
       expect(mismatch.unexpected).toEqual(["write"]);
-      expect(mismatch.missing).toEqual(["grep", "get_trace", "propose_lessons"]);
+      expect(mismatch.missing).toEqual(["grep", "get_trace", "propose_lessons", "tasks_completed"]);
       expect(mismatch.message).toContain("does not match the sealed list");
     }
   });
@@ -205,8 +216,10 @@ describe("a run", () => {
   test("takes the answer from the last propose_lessons call", async () => {
     const { result, fake } = await run({
       calls: [
+        readTail,
         { params: { verdict: "first try", lessons: [{ ...goodLesson, body: "first body" }] } },
         { params: { verdict: "second try", lessons: [goodLesson] } },
+        finish,
       ],
     });
 
@@ -222,7 +235,7 @@ describe("a run", () => {
   });
 
   test("an empty answer is a recorded outcome, not a failure", async () => {
-    const { result } = await run({ calls: [{ params: { verdict: "nothing durable here", lessons: [] } }] });
+    const { result } = await run({ calls: [readTail, { params: { verdict: "nothing durable here", lessons: [] } }, finish] });
     expect(result.status).toBe("empty");
     expect(result.verdict).toBe("nothing durable here");
     expect(result.proposals).toEqual([]);
@@ -234,14 +247,92 @@ describe("a run", () => {
     expect(result.reason).toBe("the evaluator finished without calling propose_lessons");
   });
 
+  test("an answer that stops without tasks_completed is a failure too", async () => {
+    // The exit is a call: going quiet after answering is not a finished run (ADR-0017).
+    const { result } = await run({
+      calls: [readTail, { params: { verdict: "answered, then went quiet", lessons: [goodLesson] } }],
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("the evaluator finished without calling tasks_completed");
+    expect(result.proposals).toEqual([]);
+  });
+
+  test("tasks_completed refuses while a trace has not been read to its end", async () => {
+    const { result } = await run({
+      calls: [
+        { tool: "get_trace", params: { trace: TRACE, from: 1, to: 1 } },
+        { params: { verdict: "read the head, not the tail", lessons: [goodLesson] } },
+        {
+          tool: "tasks_completed",
+          params: {},
+          errorContains: "Make sure you went through ALL the session looking for lessons and patterns before calling this tool",
+        },
+        // The refusal is what sends it back: the tail is one call away, and then the exit holds.
+        { tool: "get_trace", params: { trace: TRACE, from: 2 } },
+        finish,
+      ],
+    });
+
+    expect(result.status).toBe("lessons");
+    expect(result.verdict).toBe("read the head, not the tail");
+    expect(result.proposals).toHaveLength(1);
+  });
+
+  test("the tail of every trace is required, not just the parent's", async () => {
+    // One evaluation carries the parent and its subagents, so finishing on the parent's tail
+    // alone is the shape the gate exists to refuse.
+    const dir = await makeTempDir("omp-distill-evaluator-");
+    const paths = distillPaths(`${dir}/project`);
+    await setupProject(paths.projectRoot);
+    const sessionPath = await writeSessionFixture({
+      dir,
+      sessionId: SESSION_ID,
+      cwd: paths.projectRoot,
+      lines: [
+        userMessage({ id: "aaaa0001", parentId: null }, "the retry helper sleeps too little"),
+        assistantMessage({ id: "aaaa0002", parentId: "aaaa0001" }, [textPart("raised it to 250ms")]),
+      ],
+      subagents: [
+        { name: "Worker", sessionId: "dddd9999-2222-7000-8000-000000000051", lines: [userMessage({ id: "bbbb0001", parentId: null }, "fix the flake")] },
+      ],
+    });
+    const loaded = await loadTraceBundle({ sessionFile: sessionPath, projectRoot: paths.projectRoot });
+    if (!loaded.ok) throw new Error(loaded.reason);
+    const fake = scriptedSdk({
+      calls: [
+        readTail,
+        { params: { verdict: "read the parent only", lessons: [] } },
+        { tool: "tasks_completed", params: {}, errorContains: "Not read to the end: dddd9999 (1 record)" },
+        { tool: "get_trace", params: { trace: "dddd9999", from: 1 } },
+        finish,
+      ],
+    });
+
+    const result = await runEvaluation({
+      sdk: fake.sdk,
+      paths,
+      config: DEFAULT_CONFIG,
+      bundle: loaded.bundle,
+      payload: "payload",
+      evaluatorPrompt: "# taste",
+      modelRegistry: {} as never,
+    });
+
+    expect(result.status).toBe("empty");
+    expect(result.verdict).toBe("read the parent only");
+  });
+
   test("an unresolvable citation comes back as a tool error the model can fix", async () => {
     const { result } = await run({
       calls: [
+        readTail,
         {
           params: { verdict: "invented evidence", lessons: [{ ...goodLesson, citations: ["abc12345:deadbeef"] }] },
           errorContains: "does not contain",
         },
         { params: { verdict: "corrected", lessons: [goodLesson] } },
+        finish,
       ],
     });
 
@@ -309,7 +400,7 @@ describe("a run", () => {
 
   test("the evaluator's reads are reconstructed from its own transcript", async () => {
     const { result } = await run({
-      calls: [{ params: { verdict: "read the skills first", lessons: [] } }],
+      calls: [readTail, { params: { verdict: "read the skills first", lessons: [] } }, finish],
       entries: [
         {
           type: "message",

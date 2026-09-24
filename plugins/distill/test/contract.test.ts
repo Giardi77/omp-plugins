@@ -78,7 +78,8 @@ describe("the propose_lessons contract", () => {
     ]);
     expect(schema.properties.lessons?.items?.properties?.citations).toBeDefined();
 
-    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("once, as your final action");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("It is the only way your answer is recorded");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("call `tasks_completed`");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("trace:record");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(".omp/distill/lessons/");
     // A lesson that reads well is the point: the body's four parts, in order, and the cap.

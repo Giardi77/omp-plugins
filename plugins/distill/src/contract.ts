@@ -26,6 +26,7 @@ export const ANSWER_CONTRACT_VERSION = 2;
 export const MAX_LESSON_BODY_CHARS = 1_200;
 export const PROPOSE_LESSONS_TOOL = "propose_lessons";
 export const GET_TRACE_TOOL = "get_trace";
+export const TASKS_COMPLETED_TOOL = "tasks_completed";
 
 /**
  * Where a lesson can be written. Each kind names one OMP surface, and `target` names the
@@ -70,7 +71,7 @@ const LESSON_KINDS: readonly LessonKind[] = ["skill", "skill_reference", "rule",
 export const APPEND_SYSTEM_TARGET = "APPEND_SYSTEM.md";
 
 export const PROPOSE_LESSONS_DESCRIPTION = [
-  `Submit your judgement by calling this tool once, as your final action. It is the only way your answer is recorded: a run that ends without it is a failed run, not an empty one.`,
+  `Submit your judgement by calling this tool once. It is the only way your answer is recorded: a run that ends without it is a failed run, not an empty one. When the reading and the answer are both done, call \`${TASKS_COMPLETED_TOOL}\` — that call is what ends the run.`,
   ``,
   `verdict: one line stating what this session taught, or why nothing in it is worth keeping.`,
   `lessons: the lessons worth keeping, or [] when the session teaches nothing reusable. One lesson is one durable instruction for future agent sessions in this project.`,
@@ -152,6 +153,18 @@ export const GET_TRACE_PARAMETERS: Record<string, unknown> = {
       description: `Records per call (default ${DEFAULT_SECTION_RECORDS}, max ${MAX_SECTION_RECORDS}).`,
     },
   },
+};
+
+export const TASKS_COMPLETED_DESCRIPTION = [
+  `End the run: the clean exit, and the only one. Call this once, after \`${PROPOSE_LESSONS_TOOL}\` has recorded your answer and after every trace in the payload has been read to its last record. A run that stops without this call is a failed run, however good its answer was.`,
+  ``,
+  `It is refused while a trace's tail is unread. Each trace's header says how many records it holds, and the section that reaches the last of them is the read that counts — a \`jq\` answer does not, because what a filter keeps is not what you saw. Read the rest with \`${GET_TRACE_TOOL}\` and call this again.`,
+].join("\n");
+
+export const TASKS_COMPLETED_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {},
 };
 
 export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {

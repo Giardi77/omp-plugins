@@ -41,7 +41,7 @@ async function traceFixture(): Promise<TraceBundle> {
 describe("get_trace", () => {
   test("returns a record range with the ids a citation needs", async () => {
     const bundle = await traceFixture();
-    const text = await readTrace({ trace: bundle.traces[0]?.id, from: 1, to: 2 }, bundle, OPTIONS);
+    const { text, readToEnd } = await readTrace({ trace: bundle.traces[0]?.id, from: 1, to: 2 }, bundle, OPTIONS);
 
     expect(text).toContain("records 1..4");
     expect(text).toContain("[a1000001] user: the CI job keeps failing on the retry test");
@@ -49,21 +49,43 @@ describe("get_trace", () => {
     expect(text).not.toContain("[a1000004]");
     expect(text).toContain("section: records 1..2 of 4");
     expect(text).toContain('next: get_trace trace="51d0aaaa" from=3');
+    // A section that stopped short of record 4 is not a trace read to its end.
+    expect(readToEnd).toBeNull();
   });
 
   test("finds records by pattern", async () => {
     const bundle = await traceFixture();
-    const text = await readTrace({ trace: bundle.traces[0]?.id, pattern: "blocked by user policy" }, bundle, OPTIONS);
+    const { text, readToEnd } = await readTrace({ trace: bundle.traces[0]?.id, pattern: "blocked by user policy" }, bundle, OPTIONS);
 
     expect(text).toContain("[a1000003] toolResult edit error");
     expect(text).toContain("1 match(es)");
     expect(text).not.toContain("[a1000001]");
+    expect(readToEnd).toBeNull();
+  });
+
+  test("a section that reaches the trace's last record is what counts as reading it", async () => {
+    const bundle = await traceFixture();
+    const id = bundle.traces[0]?.id;
+    // "the last segment": nothing says a full read — the tail, and only the tail, is the evidence.
+    const tail = await readTrace({ trace: id, from: 4 }, bundle, OPTIONS);
+    expect(tail.text).toContain("[a1000004] user: the 100ms sleep is deliberate");
+    expect(tail.text).toContain("end of what you asked for");
+    expect(tail.readToEnd).toBe(id);
+
+    // A range that stops one record short is not the end, however close it gets.
+    const almost = await readTrace({ trace: id, from: 1, to: 3 }, bundle, OPTIONS);
+    expect(almost.readToEnd).toBeNull();
+
+    // A request past the last record renders nothing, so it proves nothing either.
+    const past = await readTrace({ trace: id, from: 9 }, bundle, OPTIONS);
+    expect(past.text).toContain("no records in that range");
+    expect(past.readToEnd).toBeNull();
   });
 
   test("runs a jq filter over the trace's own records, which beats a range", async () => {
     if (!Bun.which("jq")) return;
     const bundle = await traceFixture();
-    const text = await readTrace(
+    const { text } = await readTrace(
       {
         trace: bundle.traces[0]?.id,
         jq: '.message.content[]? | select(.type=="toolCall") | .name',
@@ -80,11 +102,21 @@ describe("get_trace", () => {
     expect(text).not.toContain("section: records");
   });
 
+  test("a jq answer never counts as reaching the end", async () => {
+    if (!Bun.which("jq")) return;
+    const bundle = await traceFixture();
+    // The filter reads the trace, not the evaluator: what it keeps is what the model sees.
+    const read = await readTrace({ trace: bundle.traces[0]?.id, jq: "length" }, bundle, OPTIONS);
+    expect(read.text).toContain("4 records");
+    expect(read.readToEnd).toBeNull();
+  });
+
   test("an unknown trace names the ones that exist rather than failing the run", async () => {
     const bundle = await traceFixture();
-    const text = await readTrace({ trace: "nope" }, bundle, OPTIONS);
+    const { text, readToEnd } = await readTrace({ trace: "nope" }, bundle, OPTIONS);
 
     expect(text).toContain('No trace "nope"');
     expect(text).toContain("51d0aaaa (parent session)");
+    expect(readToEnd).toBeNull();
   });
 });

@@ -161,8 +161,8 @@ export async function setupProject(
 
 /**
  * The default evaluator prompt ships as a Markdown file beside the plugin — taste only, because
- * every mechanical instruction rides the `propose_lessons` description instead (D15). Its absence
- * is loud: setup refuses rather than writing an empty prompt.
+ * every mechanical instruction rides a tool description instead (D15). Its absence is loud: setup
+ * refuses rather than writing an empty prompt.
  */
 export async function readEvaluatorTemplate(): Promise<string> {
   const templatePath = path.join(import.meta.dir, "..", "templates", "evaluator.md");

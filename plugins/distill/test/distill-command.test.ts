@@ -77,13 +77,14 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
         const tools = {
           trace: createOptions.customTools?.find(candidate => isRecord(candidate) && candidate.name === "get_trace"),
           propose: createOptions.customTools?.find(candidate => isRecord(candidate) && candidate.name === "propose_lessons"),
+          finish: createOptions.customTools?.find(candidate => isRecord(candidate) && candidate.name === "tasks_completed"),
         };
         return {
           session: {
             prompt: async (text: string) => {
               lastPayload = text;
-              if (options.evaluate && isEvaluatorTool(tools.trace) && isEvaluatorTool(tools.propose)) {
-                lastRead = await scriptedAnswer({ trace: tools.trace, propose: tools.propose }, text);
+              if (options.evaluate && isEvaluatorTool(tools.trace) && isEvaluatorTool(tools.propose) && isEvaluatorTool(tools.finish)) {
+                lastRead = await scriptedAnswer({ trace: tools.trace, propose: tools.propose, finish: tools.finish }, text);
               }
               return true;
             },
@@ -101,13 +102,21 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
 }
 
 /**
- * What a real evaluator does now: read the inventory, fetch a section with get_trace, and cite a
- * record it actually read. Anything less would not exercise the reading path at all.
+ * What a real evaluator does now: read the inventory, fetch a section from every trace it holds,
+ * cite a record it actually read, and finish. Anything less would not exercise the reading path at
+ * all — and a run that skips a trace's tail is refused at the finish.
  */
-async function scriptedAnswer(tools: { trace: EvaluatorTool; propose: EvaluatorTool }, inventory: string) {
-  const traceId = /## trace ([0-9a-z-]+)/.exec(inventory)?.[1] ?? "";
-  const read = await tools.trace.execute("call-read", { trace: traceId, from: 1, to: 40 });
-  const section = read.content[0]?.text ?? "";
+async function scriptedAnswer(
+  tools: { trace: EvaluatorTool; propose: EvaluatorTool; finish: EvaluatorTool },
+  inventory: string,
+) {
+  const traceIds = [...inventory.matchAll(/^## trace ([0-9a-z-]+)/gm)].map(match => match[1] ?? "");
+  let section = "";
+  for (const [index, id] of traceIds.entries()) {
+    const read = await tools.trace.execute("call-read", { trace: id, from: 1 });
+    if (index === 0) section = read.content[0]?.text ?? "";
+  }
+  const traceId = traceIds[0] ?? "";
   const recordId = /\[([0-9a-f]{8})\]/.exec(section)?.[1] ?? "";
   await tools.propose.execute("call-propose", {
     verdict: "one lesson from the fixture",
@@ -122,6 +131,7 @@ async function scriptedAnswer(tools: { trace: EvaluatorTool; propose: EvaluatorT
       },
     ],
   });
+  await tools.finish.execute("call-finish", {});
   return { traceId, recordId, section };
 }
 

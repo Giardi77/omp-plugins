@@ -11,6 +11,9 @@ import {
   PROPOSE_LESSONS_PARAMETERS,
   PROPOSE_LESSONS_TOOL,
   resolveCitations,
+  TASKS_COMPLETED_DESCRIPTION,
+  TASKS_COMPLETED_PARAMETERS,
+  TASKS_COMPLETED_TOOL,
 } from "./contract";
 import type { ProposalInput } from "./lessons";
 import { isRecord, messageOf } from "./util";
@@ -36,7 +39,14 @@ export type EvaluatorModel = NonNullable<CreateAgentSessionOptions["model"]>;
 export type EvaluatorSessionManager = NonNullable<CreateAgentSessionOptions["sessionManager"]>;
 export type EvaluatorModelRegistry = NonNullable<CreateAgentSessionOptions["modelRegistry"]>;
 
-export const EVALUATOR_TOOL_NAMES: readonly string[] = ["read", "glob", "grep", GET_TRACE_TOOL, PROPOSE_LESSONS_TOOL];
+export const EVALUATOR_TOOL_NAMES: readonly string[] = [
+  "read",
+  "glob",
+  "grep",
+  GET_TRACE_TOOL,
+  PROPOSE_LESSONS_TOOL,
+  TASKS_COMPLETED_TOOL,
+];
 
 export class ToolSurfaceMismatch extends Error {
   readonly unexpected: string[];
@@ -186,6 +196,17 @@ export interface RunEvaluationInput {
   signal?: AbortSignal;
 }
 
+export interface TraceRead {
+  /** The section's text, as the tool hands it back. */
+  text: string;
+  /**
+   * The trace this read reached the end of — its last record was rendered — or null when it did
+   * not. Asked-for is not seen, so what counts is the section, and a `jq` answer never does: a
+   * filter's output is what it kept, not what the evaluator has read (ADR-0017).
+   */
+  readToEnd: string | null;
+}
+
 /**
  * Reads one trace on the evaluator's behalf: a record range, a pattern match, or a jq filter over
  * the trace's own records. Every answer is bounded, and every answer carries the record ids a
@@ -197,20 +218,23 @@ export async function readTrace(
   bundle: TraceBundle,
   options: TraceRenderOptions,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<TraceRead> {
   const request = isRecord(params) ? params : {};
   const wanted = typeof request.trace === "string" ? request.trace.trim() : "";
   const trace = bundle.traces.find(candidate => candidate.id === wanted);
   if (!trace) {
     const known = bundle.traces.map(candidate => `${candidate.id} (${candidate.label})`).join(", ");
-    return `No trace "${wanted}" in this payload. The traces are: ${known}.`;
+    return { text: `No trace "${wanted}" in this payload. The traces are: ${known}.`, readToEnd: null };
   }
 
   if (typeof request.jq === "string" && request.jq.trim() !== "") {
     const result = await runJq(request.jq, trace.records, signal === undefined ? {} : { signal });
-    return result.ok
-      ? `jq ${request.jq.trim()} over trace ${trace.id} (${trace.records.length} records)\n${result.output}`
-      : `jq could not answer that: ${result.error}`;
+    return {
+      text: result.ok
+        ? `jq ${request.jq.trim()} over trace ${trace.id} (${trace.records.length} records)\n${result.output}`
+        : `jq could not answer that: ${result.error}`,
+      readToEnd: null,
+    };
   }
 
   const section = renderTraceSection(trace, options, {
@@ -219,14 +243,15 @@ export async function readTrace(
     ...(typeof request.pattern === "string" ? { pattern: request.pattern } : {}),
     ...(typeof request.limit === "number" ? { limit: request.limit } : {}),
   });
-  return section.text;
+  return { text: section.text, readToEnd: section.last === section.total ? trace.id : null };
 }
 
 /**
  * One evaluation: build the session, assert its surface, send the payload, and read the
  * answer out of the last `propose_lessons` call. No retry and no tool-call cap (the
  * deadline is the only bound); a run that never calls the tool is a failure, not an empty
- * result.
+ * result, and a run that stops without `tasks_completed` is unfinished however it answered
+ * (ADR-0017).
  */
 export async function runEvaluation(input: RunEvaluationInput): Promise<EvaluationRun> {
   // A scan that was cancelled before this run starts must not pay for it: the abort listener
@@ -246,6 +271,10 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
   const deadline = now + input.config.timeout_seconds * 1_000;
   const submissions: Array<{ verdict: string; proposals: ProposalInput[] }> = [];
   const renderOptions = { includeThinking: input.config.include_thinking };
+  /** Traces whose last record a `get_trace` section actually rendered (ADR-0017). */
+  const tailsRead = new Set<string>();
+  /** Whether the run exited through `tasks_completed` — the only clean exit there is. */
+  let completed = false;
 
   const tool: ProposeLessonsTool = {
     name: PROPOSE_LESSONS_TOOL,
@@ -276,7 +305,14 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
         verdict: answer.answer.verdict,
         proposals: answer.answer.lessons.map((lesson, index) => ({ lesson, resolved: resolved[index]?.resolved ?? [] })),
       });
-      return { content: [{ type: "text", text: "Recorded. This was your final action." }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Recorded. Read every trace to its end, then call ${TASKS_COMPLETED_TOOL} — that call is what ends the run.`,
+          },
+        ],
+      };
     },
   };
 
@@ -286,7 +322,28 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
     description: GET_TRACE_DESCRIPTION,
     parameters: GET_TRACE_PARAMETERS,
     async execute(_toolCallId, params) {
-      return { content: [{ type: "text", text: await readTrace(params, input.bundle, renderOptions, input.signal) }] };
+      const read = await readTrace(params, input.bundle, renderOptions, input.signal);
+      if (read.readToEnd !== null) tailsRead.add(read.readToEnd);
+      return { content: [{ type: "text", text: read.text }] };
+    },
+  };
+
+  const completionTool: EvaluatorTool = {
+    name: TASKS_COMPLETED_TOOL,
+    label: "Finish the run",
+    description: TASKS_COMPLETED_DESCRIPTION,
+    parameters: TASKS_COMPLETED_PARAMETERS,
+    async execute() {
+      const unread = input.bundle.traces.filter(trace => trace.records.length > 0 && !tailsRead.has(trace.id));
+      if (unread.length > 0) {
+        throw new Error(
+          `Make sure you went through ALL the session looking for lessons and patterns before calling this tool. Not read to the end: ${unread
+            .map(trace => `${trace.id} (${trace.records.length} record${trace.records.length === 1 ? "" : "s"})`)
+            .join(", ")}.`,
+        );
+      }
+      completed = true;
+      return { content: [{ type: "text", text: "The run is finished. This was your final action." }] };
     },
   };
 
@@ -295,7 +352,7 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
       sealedSessionOptions({
         projectRoot: input.paths.projectRoot,
         evaluatorPrompt: input.evaluatorPrompt,
-        tools: [traceTool, tool],
+        tools: [traceTool, tool, completionTool],
         sessionManager: input.sdk.SessionManager.inMemory(input.paths.projectRoot),
         modelRegistry: input.modelRegistry,
         model: input.model,
@@ -335,8 +392,14 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
     // The host ends a deadline-exceeded stream gracefully rather than throwing, so the
     // deadline is re-checked here: otherwise a timed-out run would be recorded as one that
     // simply never called the tool, which is the wrong reason under D14.
-    if (failure === undefined && submissions.length === 0 && Date.now() >= deadline) {
+    if (failure === undefined && !completed && Date.now() >= deadline) {
       failure = `exceeded the ${input.config.timeout_seconds}s deadline`;
+    }
+    // The exit is a call, not a silence: a run that stopped without it is unfinished, however
+    // good its answer was, and its traces stay eligible (ADR-0017). A run that never answered
+    // at all keeps the older, more specific reason below.
+    if (failure === undefined && !completed && submissions.length > 0) {
+      failure = `the evaluator finished without calling ${TASKS_COMPLETED_TOOL}`;
     }
 
     const reads = readPathsFromTranscript(session.sessionManager.getEntries());
