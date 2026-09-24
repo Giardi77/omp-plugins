@@ -34,7 +34,7 @@ and a `tmp/` ignore rule. Then:
 /distill status    # is the loop on, how many sessions are eligible, what awaits review
 /distill scan      # evaluate sessions — the terminal offers the project's sessions to choose from
 /distill cancel    # stop a running scan
-/distill review    # decide the proposed lessons: ↑/↓ move, a accept, d deny, q quit
+/distill review    # decide the proposed lessons: a recap, each change as a diff, the evidence on e
 /distill disable   # pause without uninstalling
 /distill purge     # forget this project's records (never omp's session files)
 ```
@@ -81,7 +81,10 @@ Approval writes into one of the project's own surfaces, always append-only and a
 exists before adding: `.omp/skills/<slug>/SKILL.md` (patched, or minted when the slug is new) and
 `references/` beneath it, `.omp/rules/<name>.md` with its trigger in the frontmatter,
 `.omp/agents/<name>.md`, or `.omp/APPEND_SYSTEM.md`. `RULES.md` and the session store are out of
-scope by design; the review window shows the target file and the exact text first.
+scope by design. The review window opens with a recap of the batch — how many lessons, which files —
+then shows each lesson as a diff of the file it writes (a new file, or an append with the file's own
+tail as context), why it is worth keeping, and the cited records behind `e`; `c` shows every change
+in the batch at once.
 
 ## What leaves the machine
 

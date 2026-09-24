@@ -88,6 +88,11 @@ session at a time. It runs in the background — the session that started it can
 status` is where its state is read.
 _Avoid_: batch, crawl, job
 
+**Change**:
+What approving a lesson writes: one file created, or one appended to — never a replacement, which is
+why a change is read as added lines with the file's own tail as context.
+_Avoid_: patch, hunk, edit
+
 **Evaluation**:
 One evaluator run over the traces it was given, yielding zero or more proposed lessons. A session's
 whole bundle goes in one run, and that run records its own outcome against the traces it carried; a

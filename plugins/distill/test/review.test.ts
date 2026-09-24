@@ -206,7 +206,7 @@ function terminalContext(): Terminal {
 }
 
 describe("ReviewWindow", () => {
-  test("lists the undecided lessons and shows the selected lesson's target, body, citations and preview", () => {
+  test("lists the undecided lessons and shows the selected lesson: target, body, why, evidence ids", () => {
     const review = sit([entry("one"), entry("two")]);
     const rendered = review.text();
 
@@ -218,10 +218,11 @@ describe("ReviewWindow", () => {
     // the only place the reviewer can read why the lesson is worth keeping.
     expect(rendered).toContain("why keep it:");
     expect(rendered).toContain("the same mistake came back three times");
-    expect(rendered).toContain("trace-one#record-1");
-    expect(rendered).toContain("Excerpt of one.");
+    // The record ids always; the excerpts they stand for are one key away.
+    expect(rendered).toContain("evidence: trace-one#record-1");
+    expect(rendered).not.toContain("Excerpt of one.");
     expect(rendered).toContain("## Lesson — 2026-09-24");
-    expect(rendered).toContain("↑/↓ or j/k move · a accept · d deny · q quit");
+    expect(rendered).toContain("↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · q quit");
 
     // Only the selected lesson is detailed.
     expect(rendered).not.toContain("skill · target: target-two");
@@ -334,11 +335,11 @@ describe("ReviewWindow", () => {
     expect(rendered).toContain("existing skills: alpha, beta");
     expect(rendered).toContain("existing agents: reviewer");
 
-    // Under the target line and above the body.
+    // Under the lesson itself: what it changes and why come first, the overlap check is a caveat.
     const lines = review.window.render(WIDTH);
     const at = (needle: string) => lines.findIndex(line => line.includes(needle));
-    expect(at("skill · target: target-one")).toBeLessThan(at("existing skills: alpha, beta"));
-    expect(at("existing skills: alpha, beta")).toBeLessThan(at("Body of one."));
+    expect(at("skill · target: target-one")).toBeLessThan(at("Body of one."));
+    expect(at("Body of one.")).toBeLessThan(at("existing skills: alpha, beta"));
 
     expect(sit([entry("one")]).text()).not.toContain("overlap check");
   });
@@ -455,7 +456,80 @@ describe("ReviewWindow", () => {
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
-    expect(review.text(48)).toContain("more lines");
+  });
+
+  test("shows a lesson's change as a diff of the file it writes", () => {
+    const review = sit([
+      entry("one", {
+        changes: [
+          {
+            path: ".omp/rules/tests-from-packages-core.md",
+            mode: "create",
+            lines: [
+              { kind: "added", number: 1, text: "---" },
+              { kind: "added", number: 2, text: "name: tests-from-packages-core" },
+            ],
+            added: 2,
+            context: 0,
+          },
+        ],
+      }),
+    ]);
+
+    const rendered = review.text();
+    expect(rendered).toContain("new file  .omp/rules/tests-from-packages-core.md  (+2)");
+    expect(rendered).toContain("1 + ---");
+    expect(rendered).toContain("2 + name: tests-from-packages-core");
+    // The diff is the lesson: the raw write preview is not repeated beside it.
+    expect(rendered).not.toContain("the write:");
+    expect(rendered).toContain("c shows every change in this batch");
+  });
+
+  test("the recap names the batch before anything is read", () => {
+    const review = sit([
+      entry("one", { changes: [{ path: ".omp/rules/a.md", mode: "create", lines: [], added: 0, context: 0 }] }),
+      entry("two", { changes: [{ path: ".omp/skills/retry-helper/SKILL.md", mode: "append", lines: [], added: 0, context: 0 }] }),
+      entry("three", { blocked: "the target skill is gone" }),
+    ]);
+    const rendered = review.text();
+    expect(rendered).toContain("3 lesson(s) — 3 skill");
+    expect(rendered).toContain(".omp/rules/a.md (new)");
+    expect(rendered).toContain(".omp/skills/retry-helper/SKILL.md");
+    expect(rendered).toContain("blocked: Title three — the target skill is gone");
+  });
+
+  test("c reads every change in the batch on one screen, and goes back", () => {
+    const review = sit([
+      entry("one", {
+        changes: [{ path: ".omp/rules/one.md", mode: "create", lines: [{ kind: "added", number: 1, text: "one" }], added: 1, context: 0 }],
+      }),
+      entry("two", {
+        changes: [{ path: ".omp/rules/two.md", mode: "create", lines: [{ kind: "added", number: 1, text: "two" }], added: 1, context: 0 }],
+      }),
+    ]);
+
+    review.window.handleInput("c");
+    const changeset = review.text();
+    expect(changeset).toContain("1 + one");
+    expect(changeset).toContain("1 + two");
+    expect(changeset).toContain("Esc or c back to the list");
+
+    review.window.handleInput("");
+    expect(review.text()).toContain("↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · q quit");
+  });
+
+  test("e shows the evidence, and hides it again", () => {
+    const review = sit([entry("one")]);
+    expect(review.text()).toContain("evidence: trace-one#record-1");
+    expect(review.text()).toContain("e shows what it says in the session (1 record(s))");
+    expect(review.text()).not.toContain("Excerpt of one.");
+
+    review.window.handleInput("e");
+    expect(review.text()).toContain("Excerpt of one.");
+    expect(review.text()).toContain("e hides it");
+
+    review.window.handleInput("e");
+    expect(review.text()).not.toContain("Excerpt of one.");
   });
 });
 

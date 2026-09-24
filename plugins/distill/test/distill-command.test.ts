@@ -141,6 +141,8 @@ interface FakeModel {
 }
 
 interface FakeContextOptions {
+  /** Mounts the review window the way the TUI does, and returns its outcome. */
+  custom?: (factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (outcome: unknown) => void) => { handleInput(data: string): void }) => Promise<unknown>;
   cwd: string;
   mode: "tui" | "rpc" | "print" | "json";
   sessionDir: string;
@@ -180,7 +182,7 @@ function fakeContext(options: FakeContextOptions): { ctx: ExtensionCommandContex
         notifications.push({ message: `editor:${title}:${prefill?.length ?? 0}` });
         return undefined;
       },
-      custom: async () => undefined,
+      custom: options.custom ?? (async () => undefined),
     },
   };
   return { ctx: ctx as unknown as ExtensionCommandContext, notifications };
@@ -578,6 +580,61 @@ describe("the distill command", () => {
     expect(output).toContain("1 lesson(s) proposed");
     expect(await readScanJob(paths)).toMatchObject({ status: "finished", lessons: 1, errors: [] });
     expect(await listLessons(paths)).toHaveLength(1);
+  });
+
+  test("review mounts the window over real lessons and applies the decision it returns", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const paths = distillPaths(project);
+    await setupProject(project);
+    await fs.mkdir(path.join(project, ".omp", "skills", "retry-helper"), { recursive: true });
+    await Bun.write(
+      path.join(project, ".omp", "skills", "retry-helper", "SKILL.md"),
+      "---\nname: retry-helper\ndescription: Retries\n---\n\nRetries exist.\n",
+    );
+    await fs.mkdir(paths.lessonsDir, { recursive: true });
+    await Bun.write(
+      path.join(paths.lessonsDir, "abc123.json"),
+      `${JSON.stringify({
+        id: "abc123",
+        state: "proposed",
+        kind: "skill",
+        title: "Coarse retry backoff",
+        body: "Sleep at least 250ms between retry attempts; 100ms flaps under CI load.",
+        target: "retry-helper",
+        rationale: "The flake disappeared once the sleep grew.",
+        citations: [{ citation: `aaaa1111:${RECORD_ID}`, excerpt: "user: the retry helper sleeps too little" }],
+        createdAt: "2026-09-24T00:00:00.000Z",
+        provenance: { sessionId: SESSION_ID, traceSessionIds: [SESSION_ID], contractVersion: 1, promptSha256: "a".repeat(64) },
+      })}\n`,
+    );
+
+    const { api, commands } = harness({ agentDir });
+    distillExtension(api);
+    let quit = false;
+    const { ctx } = fakeContext({
+      cwd: project,
+      mode: "tui",
+      sessionDir,
+      custom: async factory => {
+        const window = factory({ requestRender: () => {} }, {}, {}, () => {});
+        // The window is real: the recap, the diff and the keys are all its own.
+        window.handleInput("a");
+        quit = true;
+        window.handleInput("q");
+        return new Promise(resolve => setTimeout(resolve, 0));
+      },
+    });
+
+    await captureStdout(() => commands.distill!.handler("review", ctx));
+
+    expect(quit).toBe(true);
+    // The decision landed in the surface the diff pointed at: the body appended, with its provenance.
+    const written = await Bun.file(path.join(project, ".omp", "skills", "retry-helper", "SKILL.md")).text();
+    expect(written).toContain("Retries exist.");
+    expect(written).toContain("## Lesson — 2026-09-24");
+    expect(written).toContain("Sleep at least 250ms between retry attempts; 100ms flaps under CI load.");
+    expect(written).toContain("_Distill lesson `abc123`");
+    expect((await listLessons(paths))[0]?.state).toBe("approved");
   });
 
   test("review in a session without a window reports where the lessons wait", async () => {

@@ -42,6 +42,7 @@ import {
   saveProposals,
   type StoredLesson,
 } from "./lessons";
+import { planFileChanges, type FileChange } from "./diff";
 import { runReview, type ReviewEntry } from "./review";
 import { listProjectSessions, sessionTraceIds, type SessionCandidate } from "./store";
 import { CLI_THINKING_LEVELS, parseCliThinkingLevel } from "./thinking";
@@ -676,6 +677,7 @@ async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPath
   for (const lesson of proposed) entries.push(await reviewEntry(paths, lesson));
 
   const outcome = await runReview(ctx, entries, {
+    replan: (lesson: StoredLesson) => replanLesson(paths, lesson),
     accept: async lesson => {
       try {
         const plan = await planWrite(paths, lesson);
@@ -729,10 +731,16 @@ async function reviewEntry(paths: DistillPaths, lesson: StoredLesson): Promise<R
 
   try {
     const plan = await planWrite(paths, lesson);
-    return { lesson, preview: plan.preview, context };
+    return { lesson, preview: plan.preview, context, changes: await planFileChanges(paths, plan.writes) };
   } catch (error) {
     return { lesson, preview: "", context, blocked: messageOf(error) };
   }
+}
+
+/** What a lesson would change, recomputed: a decision moves the file the next lesson appends to. */
+async function replanLesson(paths: DistillPaths, lesson: StoredLesson): Promise<FileChange[]> {
+  const plan = await planWrite(paths, lesson);
+  return await planFileChanges(paths, plan.writes);
 }
 
 /** Stops a running scan: the runner first, the broker's hammer only if it will not go. */

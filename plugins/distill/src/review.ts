@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { OverlayPanel } from "@oh-my-pi/pi-tui/chrome";
 import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
+import { describeChange, renderFileChange, type FileChange } from "./diff";
 import type { StoredLesson } from "./lessons";
 import { messageOf } from "./util";
 
@@ -27,6 +28,8 @@ export interface ReviewEntry {
   lesson: StoredLesson;
   /** The exact text an approval appends (or the whole file when minting). */
   preview: string;
+  /** What the approval does to the project, file by file. Empty when the lesson is blocked. */
+  changes?: FileChange[];
   /** Set when the lesson cannot be written as it stands (missing target, bad slug, size cap, ...). */
   blocked?: string;
   /** The overlap check's lines, verbatim (`existing skills: ...` / `existing agents: ...`). */
@@ -43,6 +46,12 @@ export interface ReviewHandlers {
   /** Resolves with an error message when the write/decision failed, else undefined. */
   accept(lesson: StoredLesson): Promise<string | undefined>;
   deny(lesson: StoredLesson, reason: string | undefined): Promise<string | undefined>;
+  /**
+   * Re-reads what a lesson would change. Called after every decision, because accepting one lesson
+   * moves the file another lesson appends to: the diff the operator approves has to be the diff that
+   * lands, not the one computed when the window opened.
+   */
+  replan?(lesson: StoredLesson): Promise<FileChange[]>;
 }
 
 /** `Theme` from pi-tui, narrowed to what the window paints with. */
@@ -121,6 +130,11 @@ export class ReviewWindow implements Component {
   #queuedAccept = false;
   #status = "";
   #statusColor: StatusColor = "muted";
+  /** The evidence toggle: record ids always show, the excerpts are one key away. */
+  #showEvidence = false;
+  /** The whole-batch view: every lesson's changes, one screen, scrolled freely. */
+  #showChangeset = false;
+  #changesetOffset = 0;
   #outcome: ReviewOutcome = { accepted: [], denied: [], quit: false };
 
   constructor(
@@ -160,6 +174,20 @@ export class ReviewWindow implements Component {
   }
 
   handleInput(data: string): void {
+    if (this.#showChangeset) {
+      const escape = matchesKey(data, "escape") || matchesKey(data, "esc") || matchesKey(data, "ctrl+c") || data === "c" || data === "q";
+      if (escape) {
+        this.#showChangeset = false;
+        this.#changesetOffset = 0;
+        this.requestRender();
+        return;
+      }
+      if (data === "j" || matchesKey(data, "down")) this.#changesetOffset += 1;
+      else if (data === "k" || matchesKey(data, "up")) this.#changesetOffset = Math.max(0, this.#changesetOffset - 1);
+      this.requestRender();
+      return;
+    }
+
     if (this.#denying !== undefined) {
       if (matchesKey(data, "escape") || matchesKey(data, "esc") || matchesKey(data, "ctrl+c")) {
         this.#denying = undefined;
@@ -183,6 +211,19 @@ export class ReviewWindow implements Component {
 
     if (data === "d") {
       this.#beginDeny();
+      return;
+    }
+
+    if (data === "e") {
+      this.#showEvidence = !this.#showEvidence;
+      this.requestRender();
+      return;
+    }
+
+    if (data === "c") {
+      this.#showChangeset = true;
+      this.#changesetOffset = 0;
+      this.requestRender();
       return;
     }
 
@@ -274,11 +315,27 @@ export class ReviewWindow implements Component {
 
     this.#outcome[kind].push(entry.lesson.id);
     this.#remove(entry);
+    await this.#replan();
     this.#setStatus(success, "success");
 
     if (this.#queuedAccept) {
       this.#queuedAccept = false;
       this.#accept();
+    }
+  }
+
+  /** What the remaining lessons would change, against the files as they are after that decision. */
+  async #replan(): Promise<void> {
+    const replan = this.handlers.replan;
+    if (replan === undefined) return;
+    for (const candidate of this.#entries) {
+      if (candidate.blocked !== undefined) continue;
+      try {
+        candidate.changes = await replan(candidate.lesson);
+      } catch {
+        // A plan that cannot be recomputed leaves the previous one on screen; the accept path fails
+        // loudly on its own if the write itself is impossible.
+      }
     }
   }
 
@@ -317,7 +374,9 @@ export class ReviewWindow implements Component {
   }
 
   #renderBody(width: number): string[] {
-    const lines: string[] = [];
+    if (this.#showChangeset) return this.#renderChangeset(width);
+
+    const lines: string[] = [...this.#recapLines(width)];
 
     if (this.#entries.length === 0) {
       lines.push(muted(this.theme, "No undecided lessons left — every lesson has been decided."));
@@ -334,12 +393,84 @@ export class ReviewWindow implements Component {
       muted(
         this.theme,
         this.#denying === undefined
-          ? "↑/↓ or j/k move · a accept · d deny · q quit"
+          ? "↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · q quit"
           : "Enter deny with this reason · Esc cancel",
       ),
     );
 
     return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
+  }
+
+  /** What this batch is, before any of it is read: the count, the files, what cannot be written. */
+  #recapLines(width: number): string[] {
+    const theme = this.theme;
+    const labels: Record<string, string> = {
+      skill: "skill",
+      skill_reference: "reference",
+      rule: "rule",
+      agent_prompt: "agent prompt",
+      append_system: "append-system",
+    };
+    const counts = new Map<string, number>();
+    for (const entry of this.#entries) counts.set(entry.lesson.kind, (counts.get(entry.lesson.kind) ?? 0) + 1);
+    const byKind = [...counts.entries()].map(([kind, count]) => `${count} ${labels[kind] ?? kind}`).join(", ");
+
+    const files = new Map<string, boolean>();
+    for (const entry of this.#entries) {
+      for (const change of entry.changes ?? []) files.set(change.path, change.mode === "create");
+    }
+    const named = [...files.entries()].map(([file, isNew]) => (isNew ? `${file} (new)` : file));
+    const blocked = this.#entries.filter(entry => entry.blocked !== undefined);
+
+    const lines = [
+      bold(theme, color(theme, "accent", truncateToWidth(`${this.#entries.length} lesson(s) — ${byKind}`, width, Ellipsis.Omit))),
+      muted(theme, truncateToWidth(`touches ${named.length} file(s)${named.length === 0 ? "" : `: ${named.join(", ")}`}`, width, Ellipsis.Omit)),
+    ];
+    for (const entry of blocked) {
+      lines.push(color(theme, "warning", truncateToWidth(`blocked: ${entry.lesson.title} — ${entry.blocked ?? ""}`, width, Ellipsis.Omit)));
+    }
+    return lines;
+  }
+
+  /** Every change in the batch, on one screen, in one order, scrolled freely. */
+  #renderChangeset(width: number): string[] {
+    const theme = this.theme;
+    const files = new Set<string>();
+    for (const entry of this.#entries) for (const change of entry.changes ?? []) files.add(change.path);
+
+    const body: string[] = [];
+    for (const entry of this.#entries) {
+      const changes = entry.changes ?? [];
+      if (changes.length === 0) continue;
+      body.push("", bold(theme, color(theme, "accent", truncateToWidth(entry.lesson.title, width, Ellipsis.Omit))));
+      // Nothing is capped here: this screen is the whole diff, and j/k is how it is read.
+      for (const change of changes) body.push(...renderFileChange(change, this.#changeTheme(), width, { maxLines: Infinity }));
+    }
+    if (body.length === 0) body.push(muted(theme, "No changes: every lesson here is blocked."));
+
+    const rows = process.stdout.rows || 24;
+    const height = Math.max(1, rows - 6);
+    const offset = Math.min(this.#changesetOffset, Math.max(0, body.length - height));
+    this.#changesetOffset = offset;
+    const visible = body.slice(offset, offset + height);
+    const more = body.length - offset - visible.length;
+
+    return [
+      ...this.#recapLines(width),
+      "",
+      ...visible,
+      ...(more > 0 ? [muted(theme, `… ${more} more line(s)`) ] : []),
+      "",
+      muted(theme, `j/k scroll · ${files.size} file(s) · Esc or c back to the list`),
+    ];
+  }
+
+  #changeTheme(): { added(text: string): string; context(text: string): string; meta(text: string): string } {
+    return {
+      added: text => color(this.theme, "success", text),
+      context: text => color(this.theme, "dim", text),
+      meta: text => muted(this.theme, text),
+    };
   }
 
   #renderDetail(entry: ReviewEntry, width: number): string[] {
@@ -351,18 +482,35 @@ export class ReviewWindow implements Component {
       muted(theme, truncateToWidth(`${lesson.kind} · target: ${lesson.target}`, width, Ellipsis.Omit)),
     ];
 
+    if (entry.blocked !== undefined) {
+      lines.push(
+        color(theme, "warning", truncateToWidth(`blocked: ${entry.blocked}`, width, Ellipsis.Omit)),
+        muted(theme, "the lesson as written, since nothing can be applied:"),
+        ...wrapTextWithAnsi(lesson.body, width),
+      );
+    } else if ((entry.changes?.length ?? 0) > 0) {
+      // The diff is the lesson: what will be added, where, with the file's own line numbers.
+      for (const change of entry.changes ?? []) {
+        lines.push("", ...renderFileChange(change, this.#changeTheme(), width, { maxLines: PREVIEW_LINES }));
+      }
+      lines.push("", muted(theme, "c shows every change in this batch"));
+    } else {
+      lines.push("", ...wrapTextWithAnsi(lesson.body, width));
+      const preview = capped(
+        entry.preview.split("\n").flatMap(line => wrapTextWithAnsi(line, width)),
+        PREVIEW_LINES,
+        hidden => muted(theme, `… ${hidden} more lines`),
+      );
+      lines.push("", muted(theme, "the write:"), ...preview.map(line => color(theme, "dim", line)));
+    }
+
     if (entry.context !== undefined) {
       lines.push(
+        "",
         muted(theme, "overlap check:"),
         ...entry.context.split("\n").flatMap(line => wrapTextWithAnsi(line, width)),
       );
     }
-
-    if (entry.blocked !== undefined) {
-      lines.push(color(theme, "warning", truncateToWidth(`blocked: ${entry.blocked}`, width, Ellipsis.Omit)));
-    }
-
-    lines.push("", ...wrapTextWithAnsi(lesson.body, width));
 
     if (lesson.rationale.trim() !== "") {
       lines.push(
@@ -373,24 +521,27 @@ export class ReviewWindow implements Component {
     }
 
     if (lesson.citations.length > 0) {
-      const quotes: string[] = [];
-      for (const citation of lesson.citations) {
-        quotes.push(...wrapTextWithAnsi(citation.citation, inner).map(line => `  ${line}`));
-        quotes.push(...wrapTextWithAnsi(citation.excerpt, inner).map(line => color(theme, "dim", `  ${line}`)));
+      const ids = lesson.citations.map(citation => citation.citation).join(", ");
+      if (!this.#showEvidence) {
+        lines.push(
+          "",
+          muted(theme, `evidence: ${truncateToWidth(ids, inner, Ellipsis.Omit)}`),
+          muted(theme, `e shows what it says in the session (${lesson.citations.length} record(s))`),
+        );
+      } else {
+        const quotes: string[] = [];
+        for (const citation of lesson.citations) {
+          quotes.push(...wrapTextWithAnsi(citation.citation, inner).map(line => `  ${line}`));
+          quotes.push(...wrapTextWithAnsi(citation.excerpt, inner).map(line => color(theme, "dim", `  ${line}`)));
+        }
+        lines.push(
+          "",
+          muted(theme, `evidence (${lesson.citations.length}) — e hides it`),
+          ...capped(quotes, CITATION_LINES, hidden => muted(theme, `  … ${hidden} more citation lines`)),
+        );
       }
-      lines.push(
-        "",
-        muted(theme, `citations (${lesson.citations.length})`),
-        ...capped(quotes, CITATION_LINES, hidden => muted(theme, `  … ${hidden} more citation lines`)),
-      );
     }
 
-    const preview = capped(
-      entry.preview.split("\n").flatMap(line => wrapTextWithAnsi(line, width)),
-      PREVIEW_LINES,
-      hidden => muted(theme, `… ${hidden} more lines`),
-    );
-    lines.push("", muted(theme, "the write:"), ...preview.map(line => color(theme, "dim", line)));
     return lines;
   }
 }
