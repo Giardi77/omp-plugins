@@ -44,6 +44,9 @@ Scans are serialized: two cannot run at once in one project.
 
 ## What lives where
 
+The default `evaluator.md` ships as [`templates/evaluator.md`](templates/evaluator.md) in this
+package; setup copies it once and never overwrites it.
+
 ```text
 .omp/distill/
   config.yaml        # activation predicate + settings (enabled, model, thinking, include_thinking, timeout_seconds, scan_limit)

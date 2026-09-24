@@ -152,11 +152,25 @@ export async function setupProject(
 
   let evaluatorCreated = false;
   if (!(await fileExists(paths.evaluatorPath))) {
-    await Bun.write(paths.evaluatorPath, DEFAULT_EVALUATOR_PROMPT);
+    await Bun.write(paths.evaluatorPath, await readEvaluatorTemplate());
     evaluatorCreated = true;
   }
 
   return { paths, config, evaluatorCreated };
+}
+
+/**
+ * The default evaluator prompt ships as a Markdown file beside the plugin — taste only, because
+ * every mechanical instruction rides the `propose_lessons` description instead (D15). Its absence
+ * is loud: setup refuses rather than writing an empty prompt.
+ */
+export async function readEvaluatorTemplate(): Promise<string> {
+  const templatePath = path.join(import.meta.dir, "..", "templates", "evaluator.md");
+  try {
+    return await Bun.file(templatePath).text();
+  } catch (error) {
+    throw new Error(`The default evaluator prompt is missing from the plugin: ${templatePath} (${messageOf(error)})`);
+  }
 }
 
 async function readRawConfig(paths: DistillPaths): Promise<Record<string, unknown> | undefined> {
@@ -194,67 +208,3 @@ function positiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/**
- * The default evaluator prompt: taste only. Every mechanical instruction — call the tool
- * once, cite qualified record ids, never quote — rides the `propose_lessons` description
- * instead (D15), so this file never goes stale against the loop.
- */
-export const DEFAULT_EVALUATOR_PROMPT = `# What this project learns from its sessions
-
-You read one agent session from this project and decide what, if anything, it teaches the
-sessions that follow. You are not summarising it. You are looking for the few things a
-future agent would have got wrong without having seen this session.
-
-## The bar
-
-Keep a lesson when all three hold:
-
-- **It changes behaviour.** A future agent reading it would act differently, not merely know
-  more. "Tests run from the package root, never the repo root" is a lesson. "The agent ran
-  the tests" is not.
-- **It is durable.** It stays true next month, in other files, for other tasks. Session
-  trivia — a file was renamed, a bug was fixed, a branch was merged — is not.
-- **It is not already known.** Read the project's skills and agent prompts first. If one
-  already says it, even in different words, there is no lesson.
-
-## What earns a lesson
-
-- A correction the operator made, and the rule that follows from it.
-- A path discovered the hard way: an ordering, a flag, a command, a workaround.
-- A mistake worth never repeating: a wrong assumption, a refuted approach, a trap.
-- Guidance a subagent needed and did not get.
-
-## What does not
-
-- Anything a skill, an agent prompt, or a file you can read already covers.
-- One-off facts about a particular bug, file, or ticket.
-- Restatements of what the agent did, however well written.
-- Preferences this project has not stated.
-- A handful of lessons at most. Most sessions teach one thing, or nothing. Proposing
-  nothing is a normal, useful answer.
-
-## Worked examples
-
-Bad: "The agent had trouble with the flaky retry test and eventually raised the sleep to
-250ms." — a narrative of the session, true but not reusable.
-
-Good: "Retry backoff in this repo is deliberately coarse: sleep at least 250ms between
-attempts, because CI load makes 100ms flap. Do not 'optimise' it back down." — a rule with
-a reason a future agent can act on.
-
-Bad: "Consider being more careful when editing shared code." — no behaviour changes.
-
-Good: "Anything under packages/core is consumed by the three plugins in this repo in the
-same commit; run \`bun run check\` at the repo root before touching it." — specific,
-checkable, durable.
-
-Bad: "The operator prefers tabs." — a style preference the project has not stated anywhere
-else.
-
-## What you see
-
-You are handed the session's traces: the parent session and its subagents, each record
-carrying the id citations must name. You have read, glob and grep with this project as your
-working directory, so its skills, its agent prompts and its source are yours to check. The
-judgement itself goes through one tool call, whose description states the mechanics.
-`;

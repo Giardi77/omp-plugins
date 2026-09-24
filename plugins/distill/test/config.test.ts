@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { YAML } from "bun";
-import { DEFAULT_CONFIG, distillPaths, isActive, readConfig, setEnabled, setupProject } from "../src/config";
+import {
+  DEFAULT_CONFIG,
+  distillPaths,
+  isActive,
+  readConfig,
+  readEvaluatorTemplate,
+  setEnabled,
+  setupProject,
+} from "../src/config";
 import { makeTempDir } from "./fixtures";
 
 async function tempProject(): Promise<string> {
@@ -28,13 +36,28 @@ describe("activation and config", () => {
     expect(config?.timeout_seconds).toBe(600);
   });
 
-  test("setup writes the evaluator prompt, the ignore rule and the store directories", async () => {
+  test("the project gets the shipped evaluator prompt, verbatim", async () => {
+    const project = await tempProject();
+    const paths = distillPaths(project);
+    await setupProject(project);
+
+    // The default prompt is a Markdown file in the plugin, not a string in the source.
+    const template = await Bun.file(path.join(import.meta.dir, "..", "templates", "evaluator.md")).text();
+    expect(await Bun.file(paths.evaluatorPath).text()).toBe(template);
+    expect(await readEvaluatorTemplate()).toBe(template);
+    expect(template).toContain("# What this project learns from its sessions");
+    expect(template).toContain("## The bar");
+    expect(template).toContain("## What you see");
+    // Taste alone: the mechanics live in the propose_lessons description (D15).
+    expect(template).not.toContain("propose_lessons");
+  });
+
+  test("setup writes the ignore rule and the store directories", async () => {
     const project = await tempProject();
     const paths = distillPaths(project);
     await setupProject(project);
 
     expect(await Bun.file(paths.gitignorePath).text()).toBe("tmp/\n.locks/\n");
-    expect(await Bun.file(paths.evaluatorPath).text()).toContain("# What this project learns from its sessions");
     for (const dir of [paths.lessonsDir, paths.tmpDir]) {
       expect((await fs.stat(dir)).isDirectory()).toBe(true);
     }

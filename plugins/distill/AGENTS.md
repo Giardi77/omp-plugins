@@ -24,6 +24,8 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
 - `src/thinking.ts` — the `--thinking` selectors `setup` offers and validates, mirrored from the
   host (ADR-0011)
 - `src/util.ts` — the shared boundary helpers (`isRecord`, `messageOf`, `fileExists`)
+- `templates/evaluator.md` — the default evaluator prompt setup copies into a project; taste only,
+  and the file an operator then owns
 
 ## Rules
 
