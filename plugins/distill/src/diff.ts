@@ -13,6 +13,7 @@
  */
 
 import * as path from "node:path";
+import { wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { DistillPaths } from "./config";
 import type { PlannedWrite } from "./writer";
 
@@ -105,11 +106,16 @@ export function renderFileChange(
 
   const numbers = shown.map(line => String(line.number)).reduce((widest, value) => Math.max(widest, value.length), 1);
   for (const line of shown) {
-    const number = String(line.number).padStart(numbers, " ");
     const gutter = line.kind === "added" ? "+" : " ";
-    const text = `${number} ${gutter} ${line.text}`;
-    const clipped = trimTo(text, width);
-    lines.push(line.kind === "added" ? theme.added(clipped) : theme.context(clipped));
+    const prefix = `${String(line.number).padStart(numbers, " ")} ${gutter} `;
+    // A lesson's body is one long line in the file it writes, and it is the thing being approved:
+    // wrap it rather than clip it, with the continuation sitting under the text.
+    const wrapped = wrapTextWithAnsi(line.text, Math.max(1, width - prefix.length));
+    const rows = wrapped.length === 0 ? [""] : wrapped;
+    rows.forEach((row, index) => {
+      const text = index === 0 ? `${prefix}${row}` : `${" ".repeat(prefix.length)}${row}`;
+      lines.push(line.kind === "added" ? theme.added(text) : theme.context(text));
+    });
   }
 
   const hidden = change.lines.length - shown.length;
@@ -128,7 +134,4 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-function trimTo(text: string, width: number): string {
-  if (text.length <= width) return text;
-  return width <= 1 ? text.slice(0, width) : `${text.slice(0, width - 1)}…`;
-}
+

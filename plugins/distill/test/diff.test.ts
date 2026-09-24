@@ -83,8 +83,10 @@ describe("rendering a change", () => {
     expect(lines[0]).toBe("Mnew file  .omp/rules/tests.md  (+3)");
     expect(lines[1]).toBe("A1 + ---");
     expect(lines[2]).toBe("A2 + name: tests");
-    // The number column is as wide as the widest number, and nothing runs past the width.
-    expect(lines[3]?.startsWith("A3 + ")).toBe(true);
+    // The long third line wraps under its own text rather than being clipped: it is the lesson, and
+    // the operator is approving exactly what it says.
+    expect(lines[3]).toBe("A3 + a line that is going to be cut");
+    expect(lines[4]?.startsWith("A    a line")).toBe(true);
     for (const line of lines) expect(line.replace(/^[ACM]/, "").length).toBeLessThanOrEqual(40);
   });
 
