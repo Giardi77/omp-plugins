@@ -11,7 +11,7 @@ import {
 } from "./contract";
 import type { ProposalInput } from "./lessons";
 import { isRecord, messageOf } from "./util";
-import type { TraceBundle } from "./trace";
+import { capText, type TraceBundle } from "./trace";
 
 /**
  * The evaluator: a second, sealed agent session inside the host process, built from
@@ -33,6 +33,27 @@ export type EvaluatorSessionManager = NonNullable<CreateAgentSessionOptions["ses
 export type EvaluatorModelRegistry = NonNullable<CreateAgentSessionOptions["modelRegistry"]>;
 
 export const EVALUATOR_TOOL_NAMES: readonly string[] = ["read", "glob", "grep", PROPOSE_LESSONS_TOOL];
+
+/** Conservative characters per token: a measured trace ran ~3.3, and underestimating splits early. */
+export const CHARS_PER_TOKEN = 3;
+/** Head-room for the system prompt, the tool description and tokenizer drift. */
+export const PROMPT_SAFETY_TOKENS = 8_000;
+/** Used when the host cannot say what the model's window is. */
+export const DEFAULT_PAYLOAD_BUDGET_CHARS = 400_000;
+
+/**
+ * How much payload one evaluation may carry: the model's window minus the completion it
+ * reserves, since a thinking model that reserves half the window cannot take a full one.
+ */
+export function payloadBudgetChars(
+  model: { contextWindow?: number | null; maxTokens?: number | null } | undefined,
+): number {
+  const window = model?.contextWindow ?? 0;
+  if (!Number.isFinite(window) || window <= 0) return DEFAULT_PAYLOAD_BUDGET_CHARS;
+  const declared = model?.maxTokens ?? 0;
+  const reserve = Math.min(declared > 0 ? declared : Math.floor(window / 4), Math.floor(window / 2));
+  return Math.max(20_000, (window - reserve - PROMPT_SAFETY_TOKENS) * CHARS_PER_TOKEN);
+}
 
 export class ToolSurfaceMismatch extends Error {
   readonly unexpected: string[];
@@ -87,6 +108,8 @@ export interface EvaluatorSessionLike {
   waitForIdle(): Promise<void>;
   getEnabledToolNames(): string[];
   sessionManager: { getEntries(): unknown[] };
+  /** The settled assistant message: the only place a failed model call leaves a reason. */
+  getLastAssistantMessage?(): { stopReason?: string; errorMessage?: string } | undefined;
   dispose(): Promise<void>;
   /** Ends the run early; used when `/distill purge` requests cancellation. */
   abort?(): void;
@@ -254,6 +277,18 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
       failure = describeRunFailure(error, input.config.timeout_seconds);
     }
     if (input.signal?.aborted && failure === undefined) failure = "cancelled";
+    // A failed model call does not throw: the run settles with an error stop reason, which is
+    // where the provider's own words live ("maximum context length", a 400, an auth refusal).
+    if (failure === undefined && submissions.length === 0) {
+      const settled = session.getLastAssistantMessage?.();
+      const settledReason = typeof settled?.stopReason === "string" ? settled.stopReason : undefined;
+      if (settledReason === "error") {
+        const detail = typeof settled?.errorMessage === "string" ? settled.errorMessage.split("\n")[0]?.trim() : "";
+        failure = `the evaluator's model call failed${detail ? `: ${capText(detail, 300)}` : ""}`;
+      } else if (settledReason === "aborted") {
+        failure = "the evaluator's run was aborted";
+      }
+    }
     // The host ends a deadline-exceeded stream gracefully rather than throwing, so the
     // deadline is re-checked here: otherwise a timed-out run would be recorded as one that
     // simply never called the tool, which is the wrong reason under D14.

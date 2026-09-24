@@ -65,6 +65,8 @@ interface Script {
   calls?: ScriptedCall[];
   promptError?: Error;
   entries?: unknown[];
+  /** The settled assistant message, where a failed model call leaves its reason. */
+  settled?: { stopReason?: string; errorMessage?: string };
 }
 
 /** A fake injected SDK whose session plays a scripted transcript. */
@@ -96,6 +98,7 @@ function scriptedSdk(script: Script) {
     },
     waitForIdle: async () => {},
     getEnabledToolNames: () => script.enabled ?? [...EVALUATOR_TOOL_NAMES],
+    getLastAssistantMessage: () => script.settled,
     sessionManager: { getEntries: () => script.entries ?? [] },
     dispose: async () => {
       disposed++;
@@ -245,6 +248,21 @@ describe("a run", () => {
     expect(result.status).toBe("lessons");
     expect(result.verdict).toBe("corrected");
     expect(result.proposals[0]?.resolved).toHaveLength(1);
+  });
+
+  test("a failed model call is reported in the provider's own words", async () => {
+    const { result } = await run({
+      settled: {
+        stopReason: "error",
+        errorMessage:
+          "400 This model's maximum context length is 1048576 tokens.\nHowever, you requested 1507603 tokens (type=invalid_request_error)",
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("the evaluator's model call failed");
+    expect(result.reason).toContain("maximum context length is 1048576 tokens");
+    expect(result.reason).not.toContain("However"); // first line only
   });
 
   test("a timeout is recorded as a failure and the session is still disposed", async () => {

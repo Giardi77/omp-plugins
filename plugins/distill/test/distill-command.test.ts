@@ -27,12 +27,15 @@ interface Harness {
   commands: Record<string, RegisteredCommand>;
   sessionStart: Handler[];
   labels: string[];
+  /** Every evaluator session the scan asked for, in order. */
+  created: CreateAgentSessionOptions[];
 }
 
 function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harness {
   const commands: Record<string, RegisteredCommand> = {};
   const sessionStart: Handler[] = [];
   const labels: string[] = [];
+  const created: CreateAgentSessionOptions[] = [];
 
   const pi = {
     setLabel: (label: string) => labels.push(label),
@@ -47,6 +50,7 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
       getAgentDir: () => options.agentDir ?? "/Users/giardi/.omp/agent",
       SessionManager: { inMemory: () => ({ memory: true }) },
       createAgentSession: async (createOptions: CreateAgentSessionOptions) => {
+        created.push(createOptions);
         const tool = createOptions.customTools?.[0];
         return {
           session: {
@@ -65,7 +69,7 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
     },
   };
 
-  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels };
+  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created };
 }
 
 function submissionFor(payload: string) {
@@ -97,6 +101,8 @@ interface FakeModel {
   provider: string;
   id: string;
   name: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 interface FakeContextOptions {
@@ -121,6 +127,7 @@ function fakeContext(options: FakeContextOptions): { ctx: ExtensionCommandContex
     hasUI: options.mode === "tui" || options.mode === "rpc",
     sessionManager: { getSessionDir: () => options.sessionDir },
     modelRegistry: { registry: true },
+    model: (options.models ?? [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }])[0],
     models: (() => {
       const models: FakeModel[] = options.models ?? [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }];
       const specOf = (model: FakeModel) => `${model.provider}/${model.id}`;
@@ -344,6 +351,70 @@ describe("the distill command", () => {
       verdict: "one lesson from the fixture",
     });
     expect(lastPayload).toContain("# distill payload");
+  });
+
+  test("a session too big for the model is evaluated one trace at a time", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const paths = distillPaths(project);
+    await setupProject(project);
+
+    // Sized so each trace fits the fake model's budget (which floors at 20k characters) while
+    // the pair together does not: rendered records cap at 4k characters each, so the size comes
+    // from how many records a session has, exactly as in a real oversized transcript.
+    const body = "the operator corrected the retry backoff, and the correction stuck. ".repeat(70);
+    const sessionFile = (await fs.readdir(sessionDir)).map(name => path.join(sessionDir, name)).find(name => name.endsWith(".jsonl"));
+    if (sessionFile === undefined) throw new Error("no session fixture");
+    await writeSessionFixture({
+      dir: sessionDir,
+      sessionId: SESSION_ID,
+      cwd: project,
+      lines: [
+        userMessage({ id: RECORD_ID, parentId: null }, body),
+        assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart(body)]),
+        userMessage({ id: "50000003", parentId: "50000002" }, body),
+        assistantMessage({ id: "50000004", parentId: "50000003" }, [textPart(body)]),
+      ],
+      subagents: [
+        {
+          name: "Worker",
+          sessionId: "aaaa1111-3333-7000-8000-000000000061",
+          lines: [
+            userMessage({ id: "60000001", parentId: null }, body),
+            assistantMessage({ id: "60000002", parentId: "60000001" }, [textPart(body)]),
+          ],
+        },
+      ],
+    });
+    void sessionFile;
+
+    const { api, commands, created } = harness({ evaluate: true, agentDir });
+    distillExtension(api);
+    const { ctx } = fakeContext({
+      cwd: project,
+      mode: "print",
+      sessionDir,
+      models: [{ provider: "deepseek", id: "tiny", name: "Tiny", contextWindow: 1 }],
+    });
+
+    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+
+    expect(created).toHaveLength(2);
+    expect(output).toContain("2 trace(s), 2 runs");
+    // The scripted evaluator proposes the same lesson for both traces, so the second run's
+    // proposal is the duplicate the store is meant to catch.
+    expect(output).toContain("1 lesson(s) proposed in 2 run(s), 1 duplicate(s) ignored");
+
+    const ledger = await readLedger(paths);
+    const evaluations = ledger.filter(record => record.kind === "evaluation");
+    expect(evaluations).toHaveLength(2);
+    for (const record of evaluations) {
+      if (record.kind !== "evaluation") continue;
+      expect(record.outcome).toBe("lessons");
+      expect(record.traceSessionIds).toHaveLength(1);
+    }
+    // One evaluation per trace, one lesson between them, and both traces covered.
+    expect(evaluations.flatMap(record => (record.kind === "evaluation" ? record.lessonIds : []))).toHaveLength(1);
+    expect(new Set(evaluations.flatMap(record => (record.kind === "evaluation" ? record.traceSessionIds : []))).size).toBe(2);
   });
 
   test("a dry run prints the payload and writes nothing", async () => {

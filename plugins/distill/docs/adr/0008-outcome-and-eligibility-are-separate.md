@@ -19,6 +19,13 @@ hides the only signal that distinguishes a boring corpus from a broken evaluator
 stay eligible the way technical faults do — rejected, because it re-pays for the same dud traces on
 every scan, which is the flooding worry inverted.
 
+**Amended 2026-09-24**: the recorded upgrade path was taken, because a real session hit the limit —
+a 3.2 MB transcript whose 10 traces came to 3.7 M characters, past the 1 M-token window of the
+model it named. A scan now sends the whole bundle while it fits, and otherwise one trace per
+evaluation, which is also what the per-trace retirement in this ADR already implied: each run
+records its own outcome and retires exactly the trace it covered. A trace that does not fit on its
+own still fails loudly with its size and stays eligible; no payload is ever truncated.
+
 **Consequences**: the evaluator-prompt hash stays in the ledger as provenance rather than as a key, so
 `/distill status` can report "N traces were evaluated under an earlier `evaluator.md`" — a prompt
 edit's coverage becomes visible without anything re-running. A payload too large for the model is a

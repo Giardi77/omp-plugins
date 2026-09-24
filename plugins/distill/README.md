@@ -42,6 +42,12 @@ and a `tmp/` ignore rule. Then:
 and calls no model, and `/distill scan --session <id>` evaluates one session without choosing.
 Scans are serialized: two cannot run at once in one project.
 
+A session whose whole bundle is larger than the evaluator's model can take is evaluated one trace
+at a time — the parent first, then each subagent — so a 3 MB transcript still yields lessons instead
+of a 400 error. Nothing is ever truncated: a single trace that still does not fit fails loudly,
+names its size, and stays eligible for a retry. A run that fails reports what the provider said
+(`the evaluator's model call failed: …`), and its dump under `tmp/` carries the same reason.
+
 ## What lives where
 
 The default `evaluator.md` ships as [`templates/evaluator.md`](templates/evaluator.md) in this
