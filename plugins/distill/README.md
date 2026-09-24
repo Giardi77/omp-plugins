@@ -57,9 +57,11 @@ package; setup copies it once and never overwrites it.
   .locks/            # gitignored: advisory lock anchors
 ```
 
-Approval writes into `.omp/skills/<slug>/SKILL.md` (append-only, dated section), a new
-`.omp/skills/<slug>/SKILL.md`, or an existing `.omp/agents/<name>.md`. Nothing else is ever written;
-`APPEND_SYSTEM.md`, `RULES.md` and the session store are out of scope by design.
+Approval writes into one of the project's own surfaces, always append-only and always editing what
+exists before adding: `.omp/skills/<slug>/SKILL.md` (patched, or minted when the slug is new) and
+`references/` beneath it, `.omp/rules/<name>.md` with its trigger in the frontmatter,
+`.omp/agents/<name>.md`, or `.omp/APPEND_SYSTEM.md`. `RULES.md` and the session store are out of
+scope by design; the review window shows the target file and the exact text first.
 
 ## What leaves the machine
 

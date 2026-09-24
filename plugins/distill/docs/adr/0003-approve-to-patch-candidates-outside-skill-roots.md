@@ -16,7 +16,10 @@ into every workspace that walks up to home).
 
 **Consequences**: patches are append-only, in a dated section, so existing hand-written prose is
 never rewritten; and every proposed lesson carries an evidence list naming the records it came from,
-which is validated against the trace before the lesson reaches the queue.
+which is validated against the trace before the lesson reaches the queue. The set of surfaces an
+approval can reach is wider than the two this ADR named — rules, skill references and
+`APPEND_SYSTEM.md` joined them in ADR-0012; this ADR's posture (edit before adding, append-only,
+the loader's own constraints) is what all of them inherit.
 
 A minted skill has to survive the loader, which drops it **silently** in one case and rejects it
 loudly in the rest. (ADR-0011 later replaced the import with a verbatim mirror in

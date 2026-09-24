@@ -46,7 +46,7 @@ async function fixtureBundle(): Promise<{ paths: DistillPaths; bundle: TraceBund
 }
 
 const goodLesson = {
-  kind: "patch_skill",
+  kind: "skill",
   title: "Wait longer between retries",
   body: "Sleep at least 250ms between retry attempts.",
   target: "retry-helper",

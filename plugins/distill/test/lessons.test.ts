@@ -17,7 +17,7 @@ import {
 import { makeTempDir } from "./fixtures";
 
 const proposal: ProposedLesson = {
-  kind: "patch_skill",
+  kind: "skill",
   title: "Wait longer between retries",
   body: "Sleep at least 250ms between retry attempts.",
   target: "retry-helper",
@@ -92,6 +92,15 @@ describe("the lesson store", () => {
     expect(replayed.created).toEqual([]);
     expect(replayed.duplicates).toEqual([id]);
     expect((await listLessons(paths, "proposed"))).toEqual([]);
+  });
+
+  test("a rule's trigger survives the proposal, so approval mints the right frontmatter", async () => {
+    const paths = await store();
+    const rule = { ...proposal, kind: "rule" as const, target: "sql-migrations", applies_to: "globs:**/*.sql" };
+
+    const { created } = await saveProposals(paths, [{ lesson: rule, resolved: resolved() }], provenance);
+    expect(created[0]?.applies_to).toBe("globs:**/*.sql");
+    expect((await readLesson(paths, created[0]?.id ?? ""))?.applies_to).toBe("globs:**/*.sql");
   });
 
   test("a decision and its ledger row land together", async () => {

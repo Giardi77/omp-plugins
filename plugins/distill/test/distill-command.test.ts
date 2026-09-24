@@ -75,7 +75,7 @@ function submissionFor(payload: string) {
     verdict: "one lesson from the fixture",
     lessons: [
       {
-        kind: "new_skill",
+        kind: "skill",
         title: "Retry backoff is coarse",
         body: "Sleep at least 250ms between retry attempts.",
         target: "retry-backoff",
@@ -302,7 +302,7 @@ describe("the distill command", () => {
       JSON.stringify({
         id: "abc123",
         state: "proposed",
-        kind: "patch_skill",
+        kind: "skill",
         title: "t",
         body: "b",
         target: "retry-helper",
@@ -331,7 +331,7 @@ describe("the distill command", () => {
       JSON.stringify({
         id: "abc123",
         state: "approved",
-        kind: "patch_skill",
+        kind: "skill",
         title: "t",
         body: "b",
         target: "retry-helper",
@@ -388,7 +388,7 @@ describe("the session-start notice", () => {
       JSON.stringify({
         id: "abc123",
         state: "proposed",
-        kind: "patch_skill",
+        kind: "skill",
         title: "t",
         body: "b",
         target: "retry-helper",

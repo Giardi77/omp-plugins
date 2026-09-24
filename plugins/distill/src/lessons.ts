@@ -45,6 +45,8 @@ export interface StoredLesson {
   title: string;
   body: string;
   target: string;
+  /** Rules only: what fires the rule; proposal-time, and written into the rule's frontmatter. */
+  applies_to?: string;
   rationale: string;
   citations: LessonCitation[];
   createdAt: string;
@@ -178,6 +180,7 @@ export async function saveProposals(
         title: proposal.lesson.title,
         body: proposal.lesson.body,
         target: proposal.lesson.target,
+        ...(proposal.lesson.applies_to === undefined ? {} : { applies_to: proposal.lesson.applies_to }),
         rationale: proposal.lesson.rationale,
         citations: proposal.resolved.map(citation => ({ citation: citation.citation, excerpt: citation.excerpt })),
         createdAt: now,
@@ -313,6 +316,7 @@ export function isStoredLesson(value: unknown): value is StoredLesson {
     typeof value.title === "string" &&
     typeof value.body === "string" &&
     typeof value.target === "string" &&
+    (value.applies_to === undefined || typeof value.applies_to === "string") &&
     Array.isArray(value.citations) &&
     isRecord(value.provenance)
   );

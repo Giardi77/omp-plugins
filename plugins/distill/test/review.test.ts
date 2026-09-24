@@ -61,7 +61,7 @@ function lesson(id: string, overrides: Partial<StoredLesson> = {}): StoredLesson
   return {
     id,
     state: "proposed",
-    kind: "patch_skill",
+    kind: "skill",
     title: `Title ${id}`,
     body: `Body of ${id}.`,
     target: `target-${id}`,
@@ -142,7 +142,7 @@ function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}): S
     text: (width = WIDTH) => window.render(width).join("\n"),
     listed: () => {
       const rendered = window.render(WIDTH).join("\n");
-      return IDS.filter(id => rendered.includes(`patch_skill · target-${id}`));
+      return IDS.filter(id => rendered.includes(`skill · target-${id}`));
     },
   };
 }
@@ -211,7 +211,7 @@ describe("ReviewWindow", () => {
     const rendered = review.text();
 
     expect(review.listed()).toEqual(["one", "two"]);
-    expect(rendered).toContain("patch_skill · target: target-one");
+    expect(rendered).toContain("skill · target: target-one");
     expect(rendered).toContain("Title one");
     expect(rendered).toContain("Body of one.");
     expect(rendered).toContain("trace-one#record-1");
@@ -220,7 +220,7 @@ describe("ReviewWindow", () => {
     expect(rendered).toContain("↑/↓ or j/k move · a accept · d deny · q quit");
 
     // Only the selected lesson is detailed.
-    expect(rendered).not.toContain("patch_skill · target: target-two");
+    expect(rendered).not.toContain("skill · target: target-two");
     expect(rendered).not.toContain("Body of two.");
   });
 
@@ -316,7 +316,7 @@ describe("ReviewWindow", () => {
 
     expect(review.accepted).toEqual([]);
     expect(review.listed()).toEqual(["one"]);
-    expect(review.text()).toContain("patch_skill · target-one · blocked");
+    expect(review.text()).toContain("skill · target-one · blocked");
     expect(review.text()).toContain("blocked: no target skill in this project");
     expect(review.text()).toContain("cannot write: no target skill in this project");
   });
@@ -333,7 +333,7 @@ describe("ReviewWindow", () => {
     // Under the target line and above the body.
     const lines = review.window.render(WIDTH);
     const at = (needle: string) => lines.findIndex(line => line.includes(needle));
-    expect(at("patch_skill · target: target-one")).toBeLessThan(at("existing skills: alpha, beta"));
+    expect(at("skill · target: target-one")).toBeLessThan(at("existing skills: alpha, beta"));
     expect(at("existing skills: alpha, beta")).toBeLessThan(at("Body of one."));
 
     expect(sit([entry("one")]).text()).not.toContain("overlap check");
@@ -366,6 +366,54 @@ describe("ReviewWindow", () => {
     decision.resolve(undefined);
     await review.settled();
 
+    expect(review.outcome).toEqual({ accepted: ["one"], denied: [], quit: true });
+  });
+
+  test("a second accept mid-write approves the next lesson instead of being dropped", async () => {
+    const first = Promise.withResolvers<string | undefined>();
+    const second = Promise.withResolvers<string | undefined>();
+    const calls: string[] = [];
+    const review = sit([entry("one"), entry("two")], {
+      accept: target => {
+        calls.push(target.id);
+        return calls.length === 1 ? first.promise : second.promise;
+      },
+    });
+
+    review.window.handleInput("a");
+    review.window.handleInput("a");
+    expect(calls).toEqual(["one"]);
+
+    first.resolve(undefined);
+    await review.settled();
+    expect(calls).toEqual(["one", "two"]);
+
+    second.resolve(undefined);
+    await review.settled();
+    review.window.handleInput("q");
+
+    expect(review.outcome).toEqual({ accepted: ["one", "two"], denied: [], quit: true });
+  });
+
+  test("quitting drops a queued accept and waits for the one in flight", async () => {
+    const first = Promise.withResolvers<string | undefined>();
+    const calls: string[] = [];
+    const review = sit([entry("one"), entry("two")], {
+      accept: target => {
+        calls.push(target.id);
+        return first.promise;
+      },
+    });
+
+    review.window.handleInput("a");
+    review.window.handleInput("a");
+    review.window.handleInput("q");
+    expect(review.outcome).toBeUndefined();
+
+    first.resolve(undefined);
+    await review.settled();
+
+    expect(calls).toEqual(["one"]);
     expect(review.outcome).toEqual({ accepted: ["one"], denied: [], quit: true });
   });
 
@@ -436,7 +484,7 @@ describe("runReview", () => {
 
     expect(terminal.options()).toEqual({ overlay: true });
     const mounted = terminal.mounted();
-    expect(mounted.render(WIDTH).join("\n")).toContain("patch_skill · target-two");
+    expect(mounted.render(WIDTH).join("\n")).toContain("skill · target-two");
 
     mounted.handleInput(DOWN);
     mounted.handleInput("a");

@@ -519,7 +519,7 @@ async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPath
         const written = await applyWrite(paths, plan);
         await decideLesson(paths, lesson.id, {
           state: "approved",
-          written: [path.relative(paths.projectRoot, written.path)],
+          written: written.written.map(file => path.relative(paths.projectRoot, file)),
         });
         return undefined;
       } catch (error) {
@@ -560,11 +560,13 @@ async function reviewEntry(paths: DistillPaths, lesson: StoredLesson): Promise<R
   const context = [
     `existing skills: ${inventory.skills.length === 0 ? "none" : inventory.skills.map(skill => skill.name).join(", ")}`,
     `existing agents: ${inventory.agents.length === 0 ? "none" : inventory.agents.join(", ")}`,
+    `existing rules: ${inventory.rules.length === 0 ? "none" : inventory.rules.join(", ")}`,
+    `APPEND_SYSTEM.md: ${inventory.appendSystem ? "present" : "absent"}`,
   ].join("\n");
 
   try {
     const plan = await planWrite(paths, lesson);
-    return { lesson, preview: plan.text, context };
+    return { lesson, preview: plan.preview, context };
   } catch (error) {
     return { lesson, preview: "", context, blocked: messageOf(error) };
   }

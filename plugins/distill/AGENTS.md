@@ -16,7 +16,8 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
 - `src/bundle.ts` — one session's parent + subagent traces into one payload
 - `src/evaluator.ts` — the sealed in-process evaluator session, its surface assertion, the run
 - `src/lessons.ts` — lesson JSON + append-only ledger, eligibility, purge
-- `src/writer.ts` — the only write path: patch an existing skill/agent prompt or mint a skill
+- `src/writer.ts` — the only write path: skills (and their `references/`), rules, agent prompts,
+  `APPEND_SYSTEM.md`
 - `src/review.ts` — the terminal review window
 - `src/commands.ts` / `src/index.ts` — the `/distill` command surface and the session-start notice
 - `src/skill-rules.ts` — skill name/description/frontmatter rules and the size cap the loader
@@ -37,8 +38,12 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   direct specifier resolves to the marketplace copy, not the running host). Sealing options are
   asserted through `getEnabledToolNames()` before any payload is sent, and the host version is
   gated at 17.4.0 (ADR-0007, ADR-0009).
-- Nothing is written into `.omp/skills/` or `.omp/agents/` except through an approval, and review
-  is terminal-only (ADR-0003, ADR-0010): never add a headless approve/deny path.
+- Nothing is written into the project's own surfaces except through an approval, and review is
+  terminal-only (ADR-0003, ADR-0010): never add a headless approve/deny path. The surfaces and the
+  kind vocabulary are ADR-0012's; `RULES.md` and the session store stay out of scope.
+- A rule's frontmatter uses the host's own keys (`alwaysApply`, `globs`, `condition`, `astCondition`,
+  `agents`) and a patch never rewrites them: a different trigger is a refusal, not a merge. Skill
+  references are a file plus the line in `SKILL.md` that points at it.
 - Retirement reads *execution*, not outcome (ADR-0008): only technical faults leave a trace
   eligible, and `purge` is the only re-opener.
 - Lesson names, descriptions and file sizes go through `src/skill-rules.ts` — a description that

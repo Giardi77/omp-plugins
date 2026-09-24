@@ -117,6 +117,8 @@ export class ReviewWindow implements Component {
   #pending = false;
   /** The in-flight decision, so quitting cannot outrun the write it started. */
   #inFlight: Promise<void> | undefined;
+  /** A second `a` that arrived mid-write: the operator meant the next row, so it is replayed. */
+  #queuedAccept = false;
   #status = "";
   #statusColor: StatusColor = "muted";
   #outcome: ReviewOutcome = { accepted: [], denied: [], quit: false };
@@ -205,7 +207,11 @@ export class ReviewWindow implements Component {
 
   #accept(): void {
     const entry = this.#current();
-    if (entry === undefined || this.#pending) return;
+    if (entry === undefined) return;
+    if (this.#pending) {
+      this.#queuedAccept = true;
+      return;
+    }
 
     if (entry.blocked !== undefined) {
       this.#setStatus(`cannot write: ${entry.blocked}`, "warning");
@@ -259,6 +265,9 @@ export class ReviewWindow implements Component {
     this.#inFlight = undefined;
 
     if (failure !== undefined) {
+      // The row stays and the error is on screen; a queued press is dropped rather than
+      // retried against a write that just refused.
+      this.#queuedAccept = false;
       this.#setStatus(failure, "error");
       return;
     }
@@ -266,6 +275,11 @@ export class ReviewWindow implements Component {
     this.#outcome[kind].push(entry.lesson.id);
     this.#remove(entry);
     this.#setStatus(success, "success");
+
+    if (this.#queuedAccept) {
+      this.#queuedAccept = false;
+      this.#accept();
+    }
   }
 
   #remove(entry: ReviewEntry): void {
@@ -291,6 +305,9 @@ export class ReviewWindow implements Component {
    * count it, and the caller's summary reads from the store the write is about to land in.
    */
   #finish(): void {
+    // Leaving wins over a press that never started: the in-flight decision is waited for,
+    // a queued one is discarded.
+    this.#queuedAccept = false;
     const inFlight = this.#inFlight;
     if (inFlight === undefined) {
       this.done({ ...this.#outcome, quit: true });

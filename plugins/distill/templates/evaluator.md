@@ -32,6 +32,30 @@ Keep a lesson when all three hold:
 - A handful of lessons at most. Most sessions teach one thing, or nothing. Proposing
   nothing is a normal, useful answer.
 
+## Where a lesson goes
+
+Each surface in this project is for one kind of instruction. Pick the narrowest one that will
+hold the lesson, and edit what exists before adding anything: a file that already says
+something close gets the change, never a duplicate.
+
+- **A behaviour that can be stated exactly for a situation you can name** — a command being
+  run, a file pattern, a shape of edit — belongs in a rule under `.omp/rules/`, and you say
+  what fires it. A rule that fires always is the most expensive thing you can propose: its
+  full text rides every request, so reserve it for what must never be missed.
+- **A subagent's own behaviour** belongs in that agent's file under `.omp/agents/`.
+- **Something permanent the main agent must always respect** belongs in
+  `.omp/APPEND_SYSTEM.md` — the loudest surface there is. If it applies only sometimes, or is
+  merely useful, it belongs somewhere else.
+- **A behaviour, workaround or well-defined problem** belongs in a skill under
+  `.omp/skills/<slug>/SKILL.md`: the procedure a future session needs when it meets the same
+  problem.
+- **A sub-problem of a skill that is not always encountered** belongs in that skill's
+  `references/` directory, with the skill's `SKILL.md` pointing at it. The skill stays the
+  entry point; the reference holds the detail.
+
+Ask first whether editing what exists would do the job: a file nobody needs is worse than no
+lesson at all.
+
 ## Worked examples
 
 Bad: "The agent had trouble with the flaky retry test and eventually raised the sleep to

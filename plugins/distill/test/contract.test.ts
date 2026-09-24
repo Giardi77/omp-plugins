@@ -3,7 +3,9 @@ import { loadSession, resolveBranch } from "../src/store";
 import { buildBundle } from "../src/trace";
 import {
   ANSWER_CONTRACT_VERSION,
+  parseAppliesTo,
   type ProposedLesson,
+  targetProblems,
   lessonId,
   parseAnswer,
   parseCitation,
@@ -40,7 +42,7 @@ async function fixtureBundle() {
 }
 
 const validLesson: ProposedLesson = {
-  kind: "patch_skill",
+  kind: "skill",
   title: "Wait longer between retries",
   body: "Sleep at least 250ms between retry attempts; 100ms flaps under CI load.",
   target: "retry-helper",
@@ -79,6 +81,40 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("Never quote text into the body");
   });
 
+  test("every surface OMP offers is a kind, and each kind checks its target", () => {
+    const schema = PROPOSE_LESSONS_PARAMETERS as { properties: { lessons?: { items?: { properties?: Record<string, { enum?: string[] }> } } } };
+    expect(schema.properties.lessons?.items?.properties?.kind?.enum).toEqual([
+      "skill",
+      "skill_reference",
+      "rule",
+      "agent_prompt",
+      "append_system",
+    ]);
+    expect(schema.properties.lessons?.items?.properties?.applies_to).toBeDefined();
+
+    expect(targetProblems("skill", "retry-backoff")).toEqual([]);
+    expect(targetProblems("rule", "Bad Name")).toHaveLength(1);
+    expect(targetProblems("agent_prompt", "reviewer")).toEqual([]);
+    expect(targetProblems("skill_reference", "retry-helper/ci-load")).toEqual([]);
+    expect(targetProblems("skill_reference", "retry-helper")).toHaveLength(1);
+    expect(targetProblems("skill_reference", "retry-helper/ci/load")).toHaveLength(1);
+    expect(targetProblems("append_system", "APPEND_SYSTEM.md")).toEqual([]);
+    expect(targetProblems("append_system", "RULES.md")).toHaveLength(1);
+  });
+
+  test("a rule's trigger is one of the host's own shapes, or nothing", () => {
+    expect(parseAppliesTo("always")).toEqual({ kind: "always" });
+    expect(parseAppliesTo("globs:**/*.sql")).toEqual({ kind: "globs", value: "**/*.sql" });
+    expect(parseAppliesTo("condition:\bterraform apply\b")).toEqual({ kind: "condition", value: "\bterraform apply\b" });
+    expect(parseAppliesTo("ast:$A + $B")).toEqual({ kind: "ast", value: "$A + $B" });
+    expect(parseAppliesTo("agent:reviewer")).toEqual({ kind: "agent", value: "reviewer" });
+    expect(parseAppliesTo("")).toBeUndefined();
+
+    for (const bad of ["sometimes", "globs:", "globs: ", "agent:Bad Name", "whenever I feel like it"]) {
+      expect(parseAppliesTo(bad)).toBeUndefined();
+    }
+  });
+
   test("accepts a well-formed answer, including an empty one", () => {
     const accepted = parseAnswer({ verdict: "nothing reusable here", lessons: [] });
     expect(accepted.ok).toBe(true);
@@ -98,6 +134,8 @@ describe("the propose_lessons contract", () => {
       [{ verdict: "x", lessons: [{ ...validLesson, body: "   " }] }, "body must be a non-empty string"],
       [{ verdict: "x", lessons: [{ ...validLesson, citations: [] }] }, "citations must name at least one"],
       [{ verdict: "x", lessons: [{ ...validLesson, citations: ["not-a-qualified-id"] }] }, "malformed id"],
+      [{ verdict: "x", lessons: [{ ...validLesson, target: "Bad Name" }] }, "target must be a skill slug"],
+      [{ verdict: "x", lessons: [{ ...validLesson, kind: "rule", target: "fine", applies_to: "whenever" }] }, "applies_to must be"],
     ];
 
     for (const [input, expected] of cases) {

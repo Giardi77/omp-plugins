@@ -28,7 +28,8 @@ _Avoid_: —
 
 **Lesson**:
 Something a trace teaches, and the unit that moves through the loop: proposed, then approved or
-denied, then written into a skill or subagent prompt.
+denied, then written into one of the project's own surfaces — a skill (or one of its references),
+a rule, a subagent prompt, or `APPEND_SYSTEM.md`.
 _Avoid_: candidate, insight, knowledge, memory
 
 **Citation**:
