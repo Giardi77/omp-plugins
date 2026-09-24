@@ -1,0 +1,156 @@
+import { describe, expect, test } from "bun:test";
+import { loadSession, resolveBranch } from "../src/store";
+import { buildBundle } from "../src/trace";
+import {
+  ANSWER_CONTRACT_VERSION,
+  type ProposedLesson,
+  lessonId,
+  parseAnswer,
+  parseCitation,
+  PROPOSE_LESSONS_DESCRIPTION,
+  PROPOSE_LESSONS_PARAMETERS,
+  PROPOSE_LESSONS_TOOL,
+  resolveCitations,
+} from "../src/contract";
+import { assistantMessage, entriesOf, makeTempDir, textPart, userMessage, writeSessionFixture } from "./fixtures";
+
+const SESSION_ID = "abc12345-1111-7000-8000-000000000020";
+
+async function fixtureBundle() {
+  const dir = await makeTempDir("omp-distill-contract-");
+  const cwd = "/work/alpha";
+  const sessionPath = await writeSessionFixture({
+    dir,
+    sessionId: SESSION_ID,
+    cwd,
+    lines: [
+      userMessage({ id: "aaaa0001", parentId: null }, "the retry helper sleeps too little"),
+      assistantMessage({ id: "aaaa0002", parentId: "aaaa0001" }, [textPart("raised it to 250ms")]),
+    ],
+  });
+  const loaded = await loadSession(sessionPath);
+  if (!loaded.ok) throw new Error(loaded.reason);
+  return buildBundle({
+    projectRoot: cwd,
+    sessionId: loaded.session.header.id,
+    sessionFile: sessionPath,
+    parent: resolveBranch(loaded.session.entries),
+    subagents: [],
+  });
+}
+
+const validLesson: ProposedLesson = {
+  kind: "patch_skill",
+  title: "Wait longer between retries",
+  body: "Sleep at least 250ms between retry attempts; 100ms flaps under CI load.",
+  target: "retry-helper",
+  rationale: "The session shows the flake disappearing once the sleep grew.",
+  citations: ["abc12345:aaaa0002"],
+};
+
+describe("the propose_lessons contract", () => {
+  test("is the schema and the mechanical instructions, versioned by shape", () => {
+    expect(PROPOSE_LESSONS_TOOL).toBe("propose_lessons");
+    expect(ANSWER_CONTRACT_VERSION).toBe(1);
+
+    const schema = PROPOSE_LESSONS_PARAMETERS as {
+      required: string[];
+      additionalProperties: boolean;
+      properties: Record<
+        string,
+        { enum?: string[]; minItems?: number; items?: { required?: string[]; properties?: Record<string, unknown> } }
+      >;
+    };
+    expect(schema.required).toEqual(["verdict", "lessons"]);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.lessons?.items?.required).toEqual([
+      "kind",
+      "title",
+      "body",
+      "target",
+      "rationale",
+      "citations",
+    ]);
+    expect(schema.properties.lessons?.items?.properties?.citations).toBeDefined();
+
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("once, as your final action");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("trace:record");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain(".omp/distill/lessons/");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("Never quote text into the body");
+  });
+
+  test("accepts a well-formed answer, including an empty one", () => {
+    const accepted = parseAnswer({ verdict: "nothing reusable here", lessons: [] });
+    expect(accepted.ok).toBe(true);
+
+    const withLesson = parseAnswer({ verdict: "one lesson", lessons: [validLesson] });
+    expect(withLesson.ok).toBe(true);
+    if (!withLesson.ok) return;
+    expect(withLesson.answer.lessons[0]).toEqual(validLesson);
+  });
+
+  test("refuses a malformed answer with a message the model can act on", () => {
+    const cases: Array<[unknown, string]> = [
+      ["not an object", "must be an object"],
+      [{ lessons: [] }, "verdict"],
+      [{ verdict: "x" }, "lessons"],
+      [{ verdict: "x", lessons: [{ ...validLesson, kind: "rewrite_everything" }] }, "kind must be one of"],
+      [{ verdict: "x", lessons: [{ ...validLesson, body: "   " }] }, "body must be a non-empty string"],
+      [{ verdict: "x", lessons: [{ ...validLesson, citations: [] }] }, "citations must name at least one"],
+      [{ verdict: "x", lessons: [{ ...validLesson, citations: ["not-a-qualified-id"] }] }, "malformed id"],
+    ];
+
+    for (const [input, expected] of cases) {
+      const result = parseAnswer(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toContain(expected);
+    }
+  });
+
+  test("citations are qualified ids", () => {
+    expect(parseCitation("abc12345:aaaa0002")).toEqual({ traceId: "abc12345", recordId: "aaaa0002" });
+    expect(parseCitation("abc12345")).toBeUndefined();
+    expect(parseCitation(":aaaa0002")).toBeUndefined();
+    expect(parseCitation("abc12345:")).toBeUndefined();
+  });
+});
+
+describe("citation resolution", () => {
+  test("resolves cited records to their excerpts", async () => {
+    const bundle = await fixtureBundle();
+    const resolution = resolveCitations({ citations: ["abc12345:aaaa0002"] }, bundle);
+
+    expect(resolution.ok).toBe(true);
+    if (!resolution.ok) return;
+    expect(resolution.resolved[0]?.recordId).toBe("aaaa0002");
+    expect(resolution.resolved[0]?.excerpt).toBe("assistant: raised it to 250ms");
+    expect(resolution.resolved[0]?.trace.label).toBe("parent session");
+  });
+
+  test("an unresolvable citation is an error naming what was wrong", async () => {
+    const bundle = await fixtureBundle();
+
+    const unknownTrace = resolveCitations({ citations: ["99999999:aaaa0002"] }, bundle);
+    expect(unknownTrace.ok).toBe(false);
+    if (!unknownTrace.ok) expect(unknownTrace.errors[0]).toContain("is not in this payload");
+
+    const unknownRecord = resolveCitations({ citations: ["abc12345:deadbeef"] }, bundle);
+    expect(unknownRecord.ok).toBe(false);
+    if (!unknownRecord.ok) expect(unknownRecord.errors[0]).toContain("does not contain");
+  });
+});
+
+describe("lesson identity", () => {
+  test("is stable under case and whitespace, and distinct for different bodies", () => {
+    const id = lessonId(validLesson);
+    expect(id).toMatch(/^[0-9a-f]{12}$/);
+    expect(lessonId({ ...validLesson, body: `  ${validLesson.body.toUpperCase()}  ` })).toBe(id);
+    expect(lessonId({ ...validLesson, body: "a different lesson" })).not.toBe(id);
+    expect(lessonId({ ...validLesson, target: "other-skill" })).not.toBe(id);
+  });
+
+  test("fixture entries stay parseable for the bundle builder", () => {
+    expect(entriesOf([userMessage({ id: "aaaa0001", parentId: null }, "x")])[0]?.id).toBe("aaaa0001");
+  });
+});

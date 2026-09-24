@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Giardi77's OMP plugin marketplace.",
-    "version": "0.1.5",
+    "version": "0.2.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
@@ -21,6 +21,25 @@
       "repository": "https://github.com/Giardi77/omp-plugins/tree/main/plugins/setup-skills",
       "keywords": [
         "omp",
+        "skills",
+        "extension"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "omp-distill-extension",
+      "description": "Turn recorded OMP sessions into reviewed project knowledge.",
+      "version": "0.1.0",
+      "source": "./distill",
+      "author": {
+        "name": "Giardi77"
+      },
+      "homepage": "https://github.com/Giardi77/omp-plugins/tree/main/plugins/distill",
+      "repository": "https://github.com/Giardi77/omp-plugins/tree/main/plugins/distill",
+      "keywords": [
+        "omp",
+        "sessions",
+        "lessons",
         "skills",
         "extension"
       ],

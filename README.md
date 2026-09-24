@@ -30,6 +30,7 @@ If OMP is already running, restart it after installing so the extension is loade
 | Plugin | Description |
 | --- | --- |
 | [`omp-setup-skills-extension`](plugins/setup-skills) | Select enabled skills for an OMP project with `/setup-skills`. |
+| [`omp-distill-extension`](plugins/distill) | Turn recorded sessions into reviewed project knowledge with `/distill`. |
 
 ## Update installed marketplace plugins
 
@@ -45,6 +46,8 @@ omp plugin upgrade
 ```text
 .omp-plugin/marketplace.json      Marketplace catalog
 plugins/setup-skills/             setup-skills plugin package
+plugins/distill/                  distill plugin package
+plugins/telegram/                 telegram plugin package
 ```
 
 Each plugin lives in its own directory under `plugins/`, with its own `package.json`, source, tests, and README.
