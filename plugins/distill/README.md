@@ -35,6 +35,7 @@ and a `tmp/` ignore rule. Then:
 /distill scan      # evaluate sessions — the terminal offers the project's sessions to choose from
 /distill cancel    # stop a running scan
 /distill review    # decide the proposed lessons: a recap, each change as a diff, the evidence on e
+                   # ↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · PgUp/PgDn scroll · q quit
 /distill disable   # pause without uninstalling
 /distill purge     # forget this project's records (never omp's session files)
 ```
@@ -83,9 +84,12 @@ what it earns gets trimmed rather than added to: `.omp/skills/<slug>/SKILL.md` (
 `references/` beneath it, `.omp/rules/<name>.md` with its trigger in the frontmatter,
 `.omp/agents/<name>.md`, or `.omp/APPEND_SYSTEM.md`. `RULES.md` and the session store are out of
 scope by design. The review window opens with a recap of the batch — how many lessons, which files —
-then shows each lesson as a diff of the file it writes (a new file, or an append with the file's own
-tail as context), why it is worth keeping, and the cited records behind `e`; `c` shows every change
-in the batch at once.
+then shows each lesson as a diff of the file it writes (a new file, an append with the file's own
+tail as context, or a trim with the lines going out marked), why it is worth keeping, and the cited
+records behind `e`; `c` shows every change in the batch at once. The window is a screenful — the
+border sits on the terminal's edges, so nothing is clipped — and the detail pane scrolls a page at a
+time with `PgUp`/`PgDn` or the wheel when a lesson is longer than the room left for it. It borrows
+the alternate screen while it is open, so the terminal's own scrollback cannot move it.
 
 ## What leaves the machine
 

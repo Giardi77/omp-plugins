@@ -11,6 +11,7 @@ import {
   type SelectListTheme,
 } from "@oh-my-pi/pi-tui";
 import { OverlayPanel } from "@oh-my-pi/pi-tui/chrome";
+import { parseSgrMouse } from "@oh-my-pi/pi-tui/mouse";
 import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { describeChange, renderFileChange, type FileChange } from "./diff";
 import type { StoredLesson } from "./lessons";
@@ -59,8 +60,8 @@ export interface ReviewTheme {
 
 type StatusColor = "muted" | "success" | "error" | "warning";
 
-/** Chrome plus the detail pane, the status line and the key hints below the list. */
-const RESERVED_LINES = 16;
+/** Below this many rows the detail pane is not worth its lines: the list and the keys matter more. */
+const DETAIL_MIN_LINES = 4;
 /** A skill body, a minted file and a citation block are quoted from the head only. */
 const PREVIEW_LINES = 12;
 const CITATION_LINES = 12;
@@ -131,6 +132,15 @@ export class ReviewWindow implements Component {
   /** The whole-batch view: every lesson's changes, one screen, scrolled freely. */
   #showChangeset = false;
   #changesetOffset = 0;
+  #changesetPage = 1;
+  /** How far into the selected lesson's detail the pane is scrolled, and how much a page is. */
+  #detailOffset = 0;
+  #detailPage = 1;
+  /** Frame rows the detail pane covers (row 0 is the panel's top border), for wheel hit-testing. */
+  #paneTop = 0;
+  #paneBottom = -1;
+  /** The list's row budget as last rendered, so the height is recomputed only when it changes. */
+  #listRows = 0;
   #outcome: ReviewOutcome = { accepted: [], denied: [], quit: false };
 
   constructor(
@@ -144,17 +154,17 @@ export class ReviewWindow implements Component {
     // Undecided lessons only: a decided lesson is never listed, let alone decided twice.
     this.#entries = entries.filter(entry => entry.lesson.state === "proposed");
     this.#panel = new OverlayPanel("Distill review");
-    const terminalRows = options?.rows ?? process.stdout.rows ?? 24;
-    const maxVisible = Math.max(1, Math.min(this.#entries.length, terminalRows - RESERVED_LINES));
     // No search (the rows are acted on by key, not filtered) and no wrap-around: a stray arrow
-    // must never point `a` at the first lesson after the last one.
-    this.#list = new SelectList(this.#items(), maxVisible, selectListTheme(theme), {
+    // must never point `a` at the first lesson after the last one. The row budget is not decided
+    // here: it comes from the terminal's height, which is known on every render and can change.
+    this.#list = new SelectList(this.#items(), 1, selectListTheme(theme), {
       search: "never",
       wrapNavigation: false,
     });
     this.#list.onSelectionChange = item => {
       const index = this.#entries.findIndex(entry => entry.lesson.id === item.value);
       if (index !== -1) this.#selectedIndex = index;
+      this.#detailOffset = 0;
       this.requestRender();
     };
     this.#reason.prompt = "reason: ";
@@ -186,6 +196,11 @@ export class ReviewWindow implements Component {
       }
       if (data === "j" || matchesKey(data, "down")) this.#changesetOffset += 1;
       else if (data === "k" || matchesKey(data, "up")) this.#changesetOffset = Math.max(0, this.#changesetOffset - 1);
+      else if (matchesKey(data, "pageDown")) this.#changesetOffset += this.#changesetPage;
+      else if (matchesKey(data, "pageUp")) this.#changesetOffset = Math.max(0, this.#changesetOffset - this.#changesetPage);
+      else this.#handleWheel(data, delta => {
+        this.#changesetOffset = Math.max(0, this.#changesetOffset + delta * this.#changesetPage);
+      });
       this.requestRender();
       return;
     }
@@ -218,6 +233,7 @@ export class ReviewWindow implements Component {
 
     if (data === "e") {
       this.#showEvidence = !this.#showEvidence;
+      this.#detailOffset = 0; // the pane's contents changed shape; the top is where reading starts
       this.requestRender();
       return;
     }
@@ -229,15 +245,67 @@ export class ReviewWindow implements Component {
       return;
     }
 
-    // The list owns ↑/↓ and paging; j/k are the same moves under the window's keys.
+    // The detail pane scrolls one page at a time; the list keeps ↑/↓ (paging a list of titles is
+    // not a move anyone needs, and the pane is the thing that does not fit).
+    if (matchesKey(data, "pageDown")) {
+      this.#scrollDetail(1);
+      return;
+    }
+    if (matchesKey(data, "pageUp")) {
+      this.#scrollDetail(-1);
+      return;
+    }
+    if (this.#handleWheel(data, delta => this.#scrollDetail(delta))) return;
+
+    // The list owns ↑/↓; j/k are the same moves under the window's keys.
     if (data === "j") this.#list.handleInput("\x1b[B");
     else if (data === "k") this.#list.handleInput("\x1b[A");
     else this.#list.handleInput(data);
     this.requestRender();
   }
 
+  /**
+   * The wheel scrolls whatever it is over: the detail pane when the pointer is on it, the list of
+   * lessons otherwise. Returns false when `data` is not a wheel report, so other keys fall through.
+   */
+  #handleWheel(data: string, scroll: (delta: -1 | 1) => void): boolean {
+    if (!data.startsWith("\x1b[<")) return false;
+    const event = parseSgrMouse(data);
+    if (event === null || event.wheel === null) return true;
+
+    // Rows are frame-local and the frame starts at the panel's top border.
+    const overPane = event.row >= this.#paneTop && event.row <= this.#paneBottom;
+    if (overPane) scroll(event.wheel);
+    else this.#list.handleWheel(event.wheel);
+    this.requestRender();
+    return true;
+  }
+
+  /** One page of the detail pane, clamped to what is actually there. */
+  #scrollDetail(direction: -1 | 1): void {
+    this.#detailOffset = Math.max(0, this.#detailOffset + direction * Math.max(1, this.#detailPage - 1));
+    this.requestRender();
+  }
+
   #rows(): number {
-    return this.options?.rows ?? process.stdout.rows ?? 24;
+    const rows = this.options?.rows ?? process.stdout.rows ?? 0;
+    return rows > 0 ? rows : 24;
+  }
+
+  /** The rows the body may use: the panel's own border is painted outside them. */
+  #budget(): number {
+    return Math.max(8, this.#rows() - 2);
+  }
+
+  /**
+   * Exactly `budget` rows, so the border lands on the terminal's edges. The overlay is anchored to
+   * the bottom, so anything taller than the screen loses its *top* — the recap and the list, which
+   * is what "the top text is cut off" was. Nothing is allowed to be taller.
+   */
+  #frame(lines: string[], width: number, budget: number): string[] {
+    const fitted = lines.length > budget ? lines.slice(0, budget) : lines;
+    const padded = [...fitted, ...Array.from({ length: Math.max(0, budget - fitted.length) }, () => "")];
+    return padded.map(line => truncateToWidth(line, width, Ellipsis.Omit));
   }
 
   #current(): ReviewEntry | undefined {
@@ -350,6 +418,7 @@ export class ReviewWindow implements Component {
   #remove(entry: ReviewEntry): void {
     const index = this.#entries.findIndex(candidate => candidate.lesson.id === entry.lesson.id);
     if (index === -1) return;
+    this.#detailOffset = 0;
 
     this.#entries.splice(index, 1);
     // The decided row's neighbours keep their place: the next lesson moves up into its slot.
@@ -382,14 +451,11 @@ export class ReviewWindow implements Component {
   }
 
   #renderBody(width: number): string[] {
-    if (this.#showChangeset) return this.#renderChangeset(width);
+    const budget = this.#budget();
+    if (this.#showChangeset) return this.#renderChangeset(width, budget);
 
     const theme = this.theme;
     const recap = this.#recapLines(width);
-    const list =
-      this.#entries.length === 0
-        ? [muted(theme, "No undecided lessons left — every lesson has been decided.")]
-        : this.#list.render(width);
     const entry = this.#denying ?? this.#current();
     const prompt = this.#denying === undefined ? [] : ["", ...this.#reason.render(width)];
     const status = this.#status === "" ? [] : ["", color(theme, this.#statusColor, this.#status)];
@@ -402,20 +468,52 @@ export class ReviewWindow implements Component {
           : "Enter deny with this reason · Esc cancel",
       ),
     ];
+    const footer = [...prompt, ...status, ...hints];
 
-    // The detail pane gets exactly what is left of the terminal, and says so when that is not
-    // enough: the panel renders every line it is handed, and an over-tall frame is a window whose
-    // top is off-screen — which is how "the top text is cut off" actually happened.
-    const fixed = 2 /* the panel's own border */ + recap.length + list.length + prompt.length + status.length + hints.length + 1 /* the blank before the detail */ + 1 /* the cap's note */;
-    const spare = Math.max(2, this.#rows() - fixed);
-    const detail = entry === undefined ? [] : this.#renderDetail(entry, width);
-    const shown =
-      detail.length <= spare
-        ? detail
-        : capped(detail, Math.max(1, spare - 1), hidden => muted(theme, `… ${hidden} more line(s) — c reads the whole change`));
+    // The rows are shared out, not guessed: the recap and the footer are as long as they are, the
+    // list shrinks first, and the detail pane takes what is left — down to the floor below which
+    // the list is the better use of the screen. The pane scrolls rather than being dropped: the
+    // lesson, why it is kept and the evidence are the thing being decided.
+    const room = Math.max(1, budget - recap.length - footer.length - 1 /* the blank before the pane */);
+    const listRows = Math.max(1, Math.min(this.#entries.length, room - DETAIL_MIN_LINES));
+    if (listRows !== this.#listRows) {
+      this.#list.setMaxVisible(listRows);
+      this.#listRows = listRows;
+    }
+    const list =
+      this.#entries.length === 0
+        ? [muted(theme, "No undecided lessons left — every lesson has been decided.")]
+        : this.#list.render(width);
 
-    const lines = [...recap, ...list, ...(entry === undefined ? [] : ["", ...shown]), ...prompt, ...status, ...hints];
-    return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
+    const paneRows = room - list.length;
+    const wanted = entry === undefined || paneRows < DETAIL_MIN_LINES;
+    const detail = wanted ? [] : this.#renderDetail(entry, width);
+    const pane = wanted ? [] : this.#windowDetail(detail, paneRows);
+
+    // The pane's frame rows, for wheel hit-testing: + 1 for the blank above it, + 1 for the border
+    // the panel paints as row 0.
+    this.#paneTop = recap.length + list.length + 2;
+    this.#paneBottom = this.#paneTop + pane.length - 1;
+
+    const lines = [...recap, ...list, ...(pane.length === 0 ? [] : ["", ...pane]), ...footer];
+    return this.#frame(lines, width, budget);
+  }
+
+  /** The pane's slice of the lesson: what does not fit is a page away, not gone. */
+  #windowDetail(detail: string[], height: number): string[] {
+    const overflow = detail.length > height;
+    const visible = overflow ? Math.max(1, height - 1) : height; // the last row is the note's
+    const offset = Math.min(this.#detailOffset, Math.max(0, detail.length - visible));
+    this.#detailOffset = offset;
+    this.#detailPage = visible;
+
+    const shown = detail.slice(offset, offset + visible);
+    if (!overflow) return shown;
+
+    const below = detail.length - offset - shown.length;
+    const where =
+      offset === 0 ? `${below} more line(s)` : below === 0 ? `${offset} above` : `${offset} above · ${below} below`;
+    return [...shown, muted(this.theme, `… ${where} — PgUp/PgDn or the wheel scrolls this pane`)];
   }
 
   /** What this batch is, before any of it is read: the count, the files, what cannot be written. */
@@ -454,8 +552,9 @@ export class ReviewWindow implements Component {
   }
 
   /** Every change in the batch, on one screen, in one order, scrolled freely. */
-  #renderChangeset(width: number): string[] {
+  #renderChangeset(width: number, budget: number): string[] {
     const theme = this.theme;
+    const recap = this.#recapLines(width);
     const files = new Set<string>();
     for (const entry of this.#entries) for (const change of entry.changes ?? []) files.add(change.path);
 
@@ -470,21 +569,28 @@ export class ReviewWindow implements Component {
     }
     if (body.length === 0) body.push(muted(theme, "No changes: every lesson here is blocked."));
 
-    const rows = process.stdout.rows || 24;
-    const height = Math.max(1, rows - 6);
+    const footer = muted(theme, `j/k or PgUp/PgDn scroll · ${files.size} file(s) · Esc or c back to the list`);
+    // The same budget the list view lives by: the recap and the two blanks hold their rows, and
+    // the diff takes every row that is left over.
+    const height = Math.max(1, budget - recap.length - 2 - 1 /* the footer */ - 1 /* the "more" line */);
     const offset = Math.min(this.#changesetOffset, Math.max(0, body.length - height));
     this.#changesetOffset = offset;
+    this.#changesetPage = height;
     const visible = body.slice(offset, offset + height);
     const more = body.length - offset - visible.length;
 
-    return [
-      ...this.#recapLines(width),
-      "",
-      ...visible,
-      ...(more > 0 ? [muted(theme, `… ${more} more line(s)`) ] : []),
-      "",
-      muted(theme, `j/k scroll · ${files.size} file(s) · Esc or c back to the list`),
-    ];
+    return this.#frame(
+      [
+        ...recap,
+        "",
+        ...visible,
+        ...(more > 0 ? [muted(theme, `… ${more} more line(s)`)] : []),
+        "",
+        footer,
+      ],
+      width,
+      budget,
+    );
   }
 
   #changeTheme(): { added(text: string): string; removed(text: string): string; context(text: string): string; meta(text: string): string } {
@@ -573,6 +679,10 @@ export async function runReview(
   return ctx.ui.custom<ReviewOutcome>(
     (tui: TUI, theme, _keybindings, done) =>
       new ReviewWindow(entries, theme as unknown as ReviewTheme, () => tui.requestRender(), done, handlers),
-    { overlay: true },
+    // The window's frame is a screenful, so it borrows the alternate screen the way `less` does:
+    // nothing sits behind it, and the terminal's own scrollback cannot scroll the modal off the
+    // viewport — which is what it looked like when the frame was taller than a zoomed terminal.
+    // The host's defaults are restated because supplying options replaces them wholesale.
+    { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true } },
   );
 }

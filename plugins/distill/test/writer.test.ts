@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { distillPaths, setupProject, type DistillPaths } from "../src/config";
+import { MAX_MANAGED_SKILL_BYTES } from "../src/skill-rules";
 import type { StoredLesson } from "../src/lessons";
 import { applyWrite, planWrite } from "../src/writer";
 import { makeTempDir } from "./fixtures";
@@ -290,6 +291,27 @@ describe("trimming", () => {
     await expect(planWrite(paths, lesson({ removes: "Same line.", body: "" }))).rejects.toThrow(
       /appears 2 times/,
     );
+  });
+
+  test("a trim that would leave the skill over the loader's cap is blocked, not written", async () => {
+    const paths = await project();
+    const padding = "x".repeat(MAX_MANAGED_SKILL_BYTES - 400);
+    const filePath = await writeFile(
+      skillPath(paths, "retry-helper"),
+      `---\nname: retry-helper\ndescription: Retries\n---\n\nShort line to remove.\n${padding}\n`,
+    );
+
+    // Removing one short line and putting a long paragraph back is how a trim can grow a file.
+    await expect(
+      planWrite(paths, lesson({ removes: "Short line to remove.", body: "y".repeat(600) })),
+    ).rejects.toThrow(/over the \d+-byte cap/);
+
+    // What is on disk is untouched: the refusal happens before anything is written.
+    expect(await Bun.file(filePath).text()).toContain("Short line to remove.");
+
+    // A trim that actually shrinks the file is fine.
+    await applyWrite(paths, await planWrite(paths, lesson({ removes: padding, body: "" })));
+    expect((await Bun.file(filePath).text()).length).toBeLessThan(400);
   });
 
   test("a trim of a file that does not exist yet is refused, not turned into a create", async () => {

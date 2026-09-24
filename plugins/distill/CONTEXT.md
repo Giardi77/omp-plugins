@@ -58,7 +58,8 @@ visible in a trace as an error result — is always written *tool denial*.
 _Avoid_: block, permission, refusal, rejection
 
 **Review**:
-The interactive act of deciding proposed lessons: `/distill review` opens a window over them, showing
+The interactive act of deciding proposed lessons: `/distill review` opens a window over them — a
+screenful, on the alternate screen, its detail pane scrolled with `PgUp`/`PgDn` or the wheel — showing
 the selected lesson's text, target and citations, and taking accept or deny. Accept writes at once;
 there is no headless review.
 _Avoid_: triage, inbox, queue

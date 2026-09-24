@@ -21,7 +21,7 @@ import {
  * file an operator edits never goes stale against the loop.
  */
 
-export const ANSWER_CONTRACT_VERSION = 1;
+export const ANSWER_CONTRACT_VERSION = 2;
 /** A body longer than this is refused: the four parts fit in a few lines, and every extra one is noise. */
 export const MAX_LESSON_BODY_CHARS = 1_200;
 export const PROPOSE_LESSONS_TOOL = "propose_lessons";
@@ -300,11 +300,15 @@ export function parseAnswer(raw: unknown): AnswerParse {
       return;
     }
     const strings: Record<string, string> = {};
-    for (const field of ["title", "body", "target", "rationale"] as const) {
+    for (const field of ["title", "target", "rationale"] as const) {
       const value = typeof lesson[field] === "string" ? (lesson[field] as string).trim() : "";
       if (value === "") errors.push(`${where}.${field} must be a non-empty string`);
       strings[field] = value;
     }
+    // `body` is the one field a lesson may leave empty — but only when it is taking lines *out*:
+    // "the same rule twice, delete one" is a lesson whose whole content is the removal, and
+    // demanding replacement text would push the model into inventing the bloat being removed.
+    strings.body = typeof lesson.body === "string" ? lesson.body.trim() : "";
     if ((strings.body ?? "").length > MAX_LESSON_BODY_CHARS) {
       errors.push(
         `${where}.body is ${(strings.body ?? "").length} characters; keep it under ${MAX_LESSON_BODY_CHARS} — problem, instance, instruction, cost, and nothing else`,
@@ -313,6 +317,9 @@ export function parseAnswer(raw: unknown): AnswerParse {
     for (const problem of targetProblems(kind, strings.target ?? "")) errors.push(`${where}.${problem}`);
     const removes = typeof lesson.removes === "string" ? lesson.removes.trim() : undefined;
     if (removes !== undefined && removes === "") errors.push(`${where}.removes was given as empty text; omit it instead`);
+    if ((strings.body ?? "") === "" && (removes === undefined || removes === "")) {
+      errors.push(`${where}.body must be a non-empty string, or \`removes\` the lines it takes out instead`);
+    }
     const appliesTo = typeof lesson.applies_to === "string" ? lesson.applies_to.trim() : undefined;
     if (appliesTo !== undefined && appliesTo !== "" && !parseAppliesTo(appliesTo)) {
       errors.push(

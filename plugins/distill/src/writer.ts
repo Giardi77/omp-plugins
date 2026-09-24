@@ -11,7 +11,7 @@ import {
   sanitizeSkillName,
   toSkillFrontmatter,
 } from "./skill-rules";
-import { fileExists } from "./util";
+import { fileExists, messageOf } from "./util";
 
 /**
  * The only write path in distill (ADR-0003, ADR-0012): an approval writes into one of the
@@ -90,10 +90,11 @@ export async function planWrite(
   const removes = lesson.removes?.trim();
   if (removes === undefined || removes === "") return plan;
 
-  // A trim applies to the lesson's own file: for a reference that is the reference, for everything
-  // else it is the surface the lesson is about.
-  const index = lesson.kind === "skill_reference" ? 0 : 0;
-  const target = plan.writes[index];
+  // A trim applies to the lesson's own file, which is the first write of every plan: the reference
+  // itself for a reference, the surface for everything else. A reference's pointer write is
+  // dropped with it — a lesson that trims a reference is not the lesson that minted it, and one
+  // that tried to would be refused below for trimming a file that does not exist yet.
+  const target = plan.writes[0];
   if (target === undefined) return plan;
   return { ...plan, writes: await spliceWrite(target, removes, lesson.body) };
 }
@@ -122,7 +123,34 @@ async function spliceWrite(write: PlannedWrite, removes: string, body: string): 
       `The text this lesson removes appears ${found.occurrences} times in ${write.path}; quote enough of it to name one place.`,
     );
   }
-  return [{ ...write, mode: "splice", remove: found.lines.join("\n"), text: body.trim() === "" ? "" : `${body.trim()}\n` }];
+
+  const text = body.trim() === "" ? "" : `${body.trim()}\n`;
+  const remove = found.lines.join("\n");
+  // The case trims exist for is a surface already near the loader's cap, where a replacement longer
+  // than what it replaces pushes the file over and the host drops the whole skill without a word.
+  // The planner has the file in hand, so it refuses now — as a blocked lesson — rather than letting
+  // the operator approve a write that cannot land.
+  const projected = spliceContent(content, remove, text);
+  if (write.capBytes !== undefined && Buffer.byteLength(projected, "utf8") > write.capBytes) {
+    throw new Error(
+      `${write.path} would reach ${Buffer.byteLength(projected, "utf8")} bytes, over the ${write.capBytes}-byte cap. The removal has to leave it shorter than the lesson it replaces.`,
+    );
+  }
+  return [{ ...write, mode: "splice", remove, text }];
+}
+
+/**
+ * The file as it is after the quoted lines are taken out and the lesson's text put where they were.
+ * One place for this surgery, so the size the planner checks is the size the applier writes.
+ */
+export function spliceContent(content: string, remove: string, text: string): string {
+  // The quoted lines are whole lines: take their terminator with them, or a trim leaves a blank line
+  // where the removed block used to be.
+  const withTerminator = `${remove}\n`;
+  const cutting = content.includes(withTerminator) ? withTerminator : remove;
+  const at = content.indexOf(cutting);
+  if (at === -1) throw new Error("the text to remove is not in the file any more.");
+  return `${content.slice(0, at)}${text}${content.slice(at + cutting.length)}`;
 }
 
 /**
@@ -341,17 +369,12 @@ async function spliceFile(write: PlannedWrite): Promise<string> {
   if (stats.nlink > 1) throw new Error(`Refusing to overwrite ${write.path}: it has ${stats.nlink} hard links.`);
 
   const content = await Bun.file(write.path).text();
-  // The quoted lines are whole lines: take their terminator with them, or a trim leaves a blank line
-  // where the removed block used to be.
-  const withTerminator = `${write.remove}\n`;
-  const cutting = content.includes(withTerminator) ? withTerminator : write.remove;
-  const at = content.indexOf(cutting);
-  if (at === -1) {
-    throw new Error(
-      `${write.path} changed since this was planned: the text to remove is no longer there. Nothing was written.`,
-    );
+  let next: string;
+  try {
+    next = spliceContent(content, write.remove, write.text);
+  } catch (error) {
+    throw new Error(`${write.path} changed since this was planned: ${messageOf(error)} Nothing was written.`);
   }
-  const next = `${content.slice(0, at)}${write.text}${content.slice(at + cutting.length)}`;
   if (write.capBytes !== undefined && Buffer.byteLength(next, "utf8") > write.capBytes) {
     throw new Error(`${write.path} would reach ${Buffer.byteLength(next, "utf8")} bytes, over the ${write.capBytes}-byte cap.`);
   }

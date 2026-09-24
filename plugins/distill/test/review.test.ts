@@ -27,6 +27,8 @@ const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const ESC = "\x1b";
 const ENTER = "\r";
+const PAGE_UP = "\x1b[5~";
+const PAGE_DOWN = "\x1b[6~";
 
 const IDS = ["one", "two", "three"];
 
@@ -440,21 +442,76 @@ describe("ReviewWindow", () => {
     }
   });
 
-  test("a frame taller than the terminal budgets the detail pane instead of overflowing", () => {
-    const tall = entry("one", {
+  /** A lesson whose detail is longer than any terminal: 40 lines of body plus the rest of the pane. */
+  function tall(): ReviewEntry {
+    return entry("one", {
       lesson: lesson("one", { body: Array.from({ length: 40 }, (_unused, index) => `body line ${index}`).join("\n") }),
     });
+  }
 
-    const roomy = sit([tall], {}, 80);
+  test("the frame is exactly as tall as the terminal, never taller", () => {
+    // The overlay is anchored to the bottom, so a frame that outgrows the screen loses its *top*:
+    // the recap and the list, which is what "the top text is cut off" was. Both views fill the
+    // screen and neither may pass it.
+    for (const rows of [12, 24, 40, 80]) {
+      const tight = sit([tall()], {}, rows);
+      expect(tight.window.render(WIDTH).length).toBe(rows);
+      tight.window.handleInput("c");
+      expect(tight.window.render(WIDTH).length).toBe(rows);
+    }
+  });
+
+  test("a detail taller than its pane scrolls inside it, a page at a time", () => {
+    const roomy = sit([tall()], {}, 80);
     expect(roomy.text()).toContain("body line 39");
 
-    const tight = sit([tall], {}, 24);
-    const rendered = tight.text();
-    // The pane keeps what it can and says where the rest is, and the frame never outgrows the rows
-    // it was told it has: the panel renders every line it is handed, so an over-tall window is one
-    // whose top is off-screen.
-    expect(rendered).toContain("more line(s) — c reads the whole change");
-    expect(tight.window.render(WIDTH).length).toBeLessThanOrEqual(24);
+    const tight = sit([tall()], {}, 24);
+    const before = tight.text();
+    // The top of the pane is what is shown, and the pane says how much is below it.
+    expect(before).toContain("The lesson:");
+    expect(before).not.toContain("body line 39");
+    expect(before).toContain("more line(s) — PgUp/PgDn or the wheel scrolls this pane");
+
+    tight.window.handleInput(PAGE_DOWN);
+    const scrolled = tight.text();
+    expect(scrolled).not.toBe(before);
+    expect(scrolled).toContain("body line 12"); // one page on from the top of the pane
+    expect(scrolled).toContain("above ·");
+
+    // …and back, to the very top: the note names only what is below it.
+    tight.window.handleInput(PAGE_UP);
+    tight.window.handleInput(PAGE_UP);
+    expect(tight.text()).toContain("The lesson:");
+    expect(tight.text()).toContain("more line(s) — PgUp/PgDn");
+    expect(tight.text()).not.toContain("above");
+  });
+
+  test("the wheel over the pane scrolls the pane, and over the list it moves the list", () => {
+    // Frame rows: row 0 is the panel's border, the recap follows, then the list, then the pane.
+    const overList = "\x1b[<65;10;3M";
+    const overPane = "\x1b[<65;10;20M";
+
+    const onList = sit([tall(), entry("two"), entry("three")], {}, 24);
+    onList.window.handleInput(overList);
+    expect(onList.text()).toContain("❯ Title two"); // the selector moved down one
+
+    const onPane = sit([tall()], {}, 24);
+    const top = onPane.text();
+    onPane.window.handleInput(overPane);
+    expect(onPane.text()).not.toBe(top);
+    expect(onPane.text()).toContain("above ·"); // the pane scrolled, the list did not
+    expect(onPane.text()).toContain("❯ Title one");
+  });
+
+  test("the recap, the list and then the selected lesson's detail, in that order", () => {
+    const review = sit([entry("one"), entry("two")]);
+    const rendered = review.window.render(WIDTH);
+    const at = (needle: string) => rendered.findIndex(line => line.includes(needle));
+
+    expect(at("2 lesson(s)")).toBeGreaterThan(-1);
+    expect(at("❯")).toBeGreaterThan(at("2 lesson(s)"));
+    expect(at("The lesson:")).toBeGreaterThan(at("❯"));
+    expect(at("q quit")).toBeGreaterThan(at("The lesson:"));
   });
 
   test("shows a lesson's change as a diff of the file it writes", () => {
@@ -560,7 +617,13 @@ describe("runReview", () => {
       deny: () => pending.track(Promise.resolve(undefined)),
     });
 
-    expect(terminal.options()).toEqual({ overlay: true });
+    expect(terminal.options()).toEqual({
+      overlay: true,
+      // The frame is a screenful, so it borrows the alternate screen: nothing behind it, and the
+      // terminal's own scrolling cannot move the modal. The rest restates the host's defaults,
+      // which supplying options replaces wholesale.
+      overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true },
+    });
     const mounted = terminal.mounted();
     expect(mounted.render(WIDTH).join("\n")).toContain("Title two");
 

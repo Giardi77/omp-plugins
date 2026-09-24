@@ -54,7 +54,9 @@ const validLesson: ProposedLesson = {
 describe("the propose_lessons contract", () => {
   test("is the schema and the mechanical instructions, versioned by shape", () => {
     expect(PROPOSE_LESSONS_TOOL).toBe("propose_lessons");
-    expect(ANSWER_CONTRACT_VERSION).toBe(1);
+    // 2 since `removes`: the answer a v1-shaped lesson comes from and the answer a trim comes from
+    // are different shapes, and the ledger has to be able to tell them apart.
+    expect(ANSWER_CONTRACT_VERSION).toBe(2);
 
     const schema = PROPOSE_LESSONS_PARAMETERS as {
       required: string[];
@@ -85,6 +87,26 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("why the fix must be applied");
     // Grounding: the citations have to be the moment the lesson came from.
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("citations do not show it is not grounded");
+  });
+
+  test("a lesson may leave its body empty only when it is taking lines out", () => {
+    // The natural trim — "the same rule twice, delete one" — has nothing to add, and asking the
+    // model to invent replacement text is asking it to write the bloat it was sent to remove.
+    const trim = parseAnswer({
+      verdict: "the skill says the same thing twice",
+      lessons: [{ ...validLesson, body: "", removes: "## Retry backoff (old)\n\nSleep 100ms between attempts." }],
+    });
+    expect(trim.ok).toBe(true);
+    expect(trim.ok && trim.answer.lessons[0]?.body).toBe("");
+    expect(trim.ok && trim.answer.lessons[0]?.removes).toBe("## Retry backoff (old)\n\nSleep 100ms between attempts.");
+
+    const empty = parseAnswer({ verdict: "nothing", lessons: [{ ...validLesson, body: "  " }] });
+    expect(empty.ok).toBe(false);
+    expect(empty.ok || empty.error).toContain("must be a non-empty string, or `removes` the lines it takes out");
+
+    // Whitespace-only `removes` is still not a removal.
+    const blank = parseAnswer({ verdict: "nothing", lessons: [{ ...validLesson, body: "", removes: "   " }] });
+    expect(blank.ok).toBe(false);
   });
 
   test("every surface OMP offers is a kind, and each kind checks its target", () => {

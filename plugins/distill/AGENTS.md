@@ -25,7 +25,9 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
 - `src/lessons.ts` — lesson JSON + append-only ledger, eligibility, purge
 - `src/writer.ts` — the only write path: skills (and their `references/`), rules, agent prompts,
   `APPEND_SYSTEM.md`
-- `src/review.ts` — the terminal review window
+- `src/review.ts` — the terminal review window: a frame exactly the terminal's height (the overlay is
+  anchored bottom, so an over-tall frame is clipped at the top), the detail pane scrolled a page at a
+  time with `PgUp`/`PgDn` or the wheel over it, mounted fullscreen on the alternate screen
 - `src/commands.ts` / `src/index.ts` — the `/distill` command surface and the session-start notice
 - `src/skill-rules.ts` — skill name/description/frontmatter rules and the size cap the loader
   imposes, mirrored from the host (ADR-0011)
