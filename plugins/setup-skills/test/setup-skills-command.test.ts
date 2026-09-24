@@ -113,10 +113,10 @@ function registeredSetupSkillsCommand(): RegisteredCommand {
   const command = commands["setup-skills"];
   expect(command).toBeDefined();
   expect(command?.description).toBe("Select enabled skills for this project and reload the session");
-  // The glyph the plugin asks for is a name in the theme's vocabulary, never a raw emoji: the host
-  // resolves it by name, and OMP 18.3.0 does not read this field for extension commands yet, so
-  // the value here is the intent, not something on screen.
-  expect(command?.icon).toBe("toolbox");
+  // The glyph the plugin asks for, as the glyph: OMP 18.3.0 does not read this field for extension
+  // commands yet, so the value here is the intent, not something on screen. It is literal rather
+  // than a symbol name so that it needs no vocabulary.
+  expect(command?.icon).toBe("🧰");
   return command!;
 }
 

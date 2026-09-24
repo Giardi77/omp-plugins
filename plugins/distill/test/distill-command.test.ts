@@ -238,10 +238,10 @@ describe("the distill command", () => {
     expect(labels).toEqual(["Distill"]);
     expect(sessionStart).toHaveLength(1);
     expect(commands.distill?.description).toContain("scan");
-    // The glyph the plugin asks for is a name in the theme's vocabulary, never a raw emoji: the
-    // host resolves it by name. OMP 18.3.0 pins extension commands to the shared extension glyph
-    // and does not read this field yet, so the value here is the intent, not something on screen.
-    expect(commands.distill?.icon).toBe("droplet");
+    // The glyph the plugin asks for, as the glyph: OMP 18.3.0 pins extension commands to the shared
+    // extension glyph and does not read this field yet, so the value here is the intent, not
+    // something on screen. It is literal rather than a symbol name so that it needs no vocabulary.
+    expect(commands.distill?.icon).toBe("💧");
 
     const command = commands.distill!;
     const names = (command.getArgumentCompletions?.("") ?? []) as Array<{ label: string }>;
