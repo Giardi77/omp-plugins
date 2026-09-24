@@ -32,8 +32,6 @@ export interface ReviewEntry {
   changes?: FileChange[];
   /** Set when the lesson cannot be written as it stands (missing target, bad slug, size cap, ...). */
   blocked?: string;
-  /** The overlap check's lines, verbatim (`existing skills: ...` / `existing agents: ...`). */
-  context?: string;
 }
 
 export interface ReviewOutcome {
@@ -169,6 +167,11 @@ export class ReviewWindow implements Component {
     // Rendering is derived from the entries and the current selection.
   }
 
+  /** The lessons still awaiting a decision, in the order the list shows them. */
+  get undecided(): string[] {
+    return this.#entries.map(entry => entry.lesson.id);
+  }
+
   render(width: number): readonly string[] {
     return this.#panel.render(width);
   }
@@ -242,7 +245,9 @@ export class ReviewWindow implements Component {
     return this.#entries.map(entry => ({
       value: entry.lesson.id,
       label: entry.lesson.title,
-      description: `${entry.lesson.kind} · ${entry.lesson.target}${entry.blocked === undefined ? "" : " · blocked"}`,
+      // The row is the lesson's title and nothing else: the kind and the target are in the detail
+      // pane, and a row that spends its width on them cannot show the title.
+      description: entry.blocked === undefined ? "" : "blocked",
     }));
   }
 
@@ -424,10 +429,14 @@ export class ReviewWindow implements Component {
 
     const lines = [
       bold(theme, color(theme, "accent", truncateToWidth(`${this.#entries.length} lesson(s) — ${byKind}`, width, Ellipsis.Omit))),
-      muted(theme, truncateToWidth(`touches ${named.length} file(s)${named.length === 0 ? "" : `: ${named.join(", ")}`}`, width, Ellipsis.Omit)),
+      // Wrapped, not clipped: a cut path is a path nobody can act on.
+      ...(named.length === 0
+        ? [muted(theme, "touches no files")]
+        : wrapTextWithAnsi(`touches ${named.length} file(s): ${named.join(", ")}`, width).map(line => muted(theme, line))),
     ];
     for (const entry of blocked) {
-      lines.push(color(theme, "warning", truncateToWidth(`blocked: ${entry.lesson.title} — ${entry.blocked ?? ""}`, width, Ellipsis.Omit)));
+      const warning = `blocked: ${entry.lesson.title} — ${entry.blocked ?? ""}`;
+      lines.push(...wrapTextWithAnsi(warning, width).map(line => color(theme, "warning", line)));
     }
     return lines;
   }
@@ -442,7 +451,8 @@ export class ReviewWindow implements Component {
     for (const entry of this.#entries) {
       const changes = entry.changes ?? [];
       if (changes.length === 0) continue;
-      body.push("", bold(theme, color(theme, "accent", truncateToWidth(entry.lesson.title, width, Ellipsis.Omit))));
+      if (body.length > 0) body.push("");
+      body.push(bold(theme, color(theme, "accent", truncateToWidth(entry.lesson.title, width, Ellipsis.Omit))));
       // Nothing is capped here: this screen is the whole diff, and j/k is how it is read.
       for (const change of changes) body.push(...renderFileChange(change, this.#changeTheme(), width, { maxLines: Infinity }));
     }
@@ -489,33 +499,19 @@ export class ReviewWindow implements Component {
         ...wrapTextWithAnsi(lesson.body, width),
       );
     } else if ((entry.changes?.length ?? 0) > 0) {
-      // The diff is the lesson: what will be added, where, with the file's own line numbers.
+      // What will change, and where: the file's own lines, added ones marked.
       for (const change of entry.changes ?? []) {
         lines.push("", ...renderFileChange(change, this.#changeTheme(), width, { maxLines: PREVIEW_LINES }));
       }
       lines.push("", muted(theme, "c shows every change in this batch"));
-    } else {
-      lines.push("", ...wrapTextWithAnsi(lesson.body, width));
-      const preview = capped(
-        entry.preview.split("\n").flatMap(line => wrapTextWithAnsi(line, width)),
-        PREVIEW_LINES,
-        hidden => muted(theme, `… ${hidden} more lines`),
-      );
-      lines.push("", muted(theme, "the write:"), ...preview.map(line => color(theme, "dim", line)));
     }
 
-    if (entry.context !== undefined) {
-      lines.push(
-        "",
-        muted(theme, "overlap check:"),
-        ...entry.context.split("\n").flatMap(line => wrapTextWithAnsi(line, width)),
-      );
-    }
+    lines.push("", muted(theme, "The lesson:"), ...wrapTextWithAnsi(lesson.body, width));
 
     if (lesson.rationale.trim() !== "") {
       lines.push(
         "",
-        muted(theme, "why keep it:"),
+        muted(theme, "Why keep it:"),
         ...wrapTextWithAnsi(lesson.rationale, width).map(line => color(theme, "dim", line)),
       );
     }

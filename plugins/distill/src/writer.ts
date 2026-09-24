@@ -29,19 +29,6 @@ import { fileExists } from "./util";
  * without one, silently, and the writer must not report success for a skill nobody can see.
  */
 
-export interface SkillEntry {
-  name: string;
-  description: string;
-  filePath: string;
-}
-
-export interface Inventory {
-  skills: SkillEntry[];
-  agents: string[];
-  rules: string[];
-  appendSystem: boolean;
-}
-
 export interface PlannedWrite {
   path: string;
   /** `create` refuses an existing file; `append` adds after its current bytes. */
@@ -50,6 +37,11 @@ export interface PlannedWrite {
   text: string;
   /** The loader's cap, for the files it applies to. */
   capBytes?: number;
+}
+
+/** The project's permanent main-agent layer, which `append_system` targets. */
+export function appendSystemPath(paths: DistillPaths): string {
+  return path.join(paths.projectRoot, ".omp", APPEND_SYSTEM_TARGET);
 }
 
 export interface WritePlan {
@@ -71,56 +63,6 @@ export function agentRoot(paths: DistillPaths): string {
 
 export function ruleRoot(paths: DistillPaths): string {
   return path.join(paths.projectRoot, ".omp", "rules");
-}
-
-export function appendSystemPath(paths: DistillPaths): string {
-  return path.join(paths.projectRoot, ".omp", APPEND_SYSTEM_TARGET);
-}
-
-/** The project's skills, for the overlap check that decides patch-versus-mint. */
-export async function skillInventory(paths: DistillPaths): Promise<SkillEntry[]> {
-  const root = skillRoot(paths);
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-
-  const skills: SkillEntry[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const filePath = path.join(root, entry.name, "SKILL.md");
-    let content: string;
-    try {
-      content = await Bun.file(filePath).text();
-    } catch {
-      continue;
-    }
-    const { frontmatter } = parseFrontmatter(content);
-    skills.push({
-      name: typeof frontmatter.name === "string" ? frontmatter.name : entry.name,
-      description: typeof frontmatter.description === "string" ? frontmatter.description : "",
-      filePath,
-    });
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-/** The project's subagent prompts, by file stem. */
-export async function agentInventory(paths: DistillPaths): Promise<string[]> {
-  return await markdownStems(agentRoot(paths));
-}
-
-/** The project's rules, by file stem. */
-export async function ruleInventory(paths: DistillPaths): Promise<string[]> {
-  return await markdownStems(ruleRoot(paths));
-}
-
-export async function readInventory(paths: DistillPaths): Promise<Inventory> {
-  const [skills, agents, rules, appendSystem] = await Promise.all([
-    skillInventory(paths),
-    agentInventory(paths),
-    ruleInventory(paths),
-    fileExists(appendSystemPath(paths)),
-  ]);
-  return { skills, agents, rules, appendSystem };
 }
 
 /**
@@ -158,8 +100,8 @@ async function planSkill(paths: DistillPaths, lesson: WritableLesson, now: Date)
   if (await fileExists(filePath)) {
     return {
       target: name,
-      writes: [{ path: filePath, mode: "append", text: renderLessonSection(lesson, now), capBytes: MAX_MANAGED_SKILL_BYTES }],
-      preview: renderLessonSection(lesson, now),
+      writes: [{ path: filePath, mode: "append", text: renderLessonSection(lesson), capBytes: MAX_MANAGED_SKILL_BYTES }],
+      preview: renderLessonSection(lesson),
     };
   }
 
@@ -219,7 +161,7 @@ async function planRule(paths: DistillPaths, lesson: WritableLesson, now: Date):
         `.omp/rules/${name}.md is fired by different conditions; its trigger is its frontmatter, which a patch does not touch. Use a new rule name, or drop applies_to to add to its body.`,
       );
     }
-    const section = renderLessonSection(lesson, now);
+    const section = renderLessonSection(lesson);
     return {
       target: name,
       writes: [{ path: filePath, mode: "append", text: section }],
@@ -248,7 +190,7 @@ async function planAgent(paths: DistillPaths, lesson: WritableLesson, now: Date)
   if (!(await fileExists(filePath))) {
     throw new Error(`No agent prompt .omp/agents/${name}.md in this project; distill only patches existing ones.`);
   }
-  const section = renderLessonSection(lesson, now);
+  const section = renderLessonSection(lesson);
   return { target: name, writes: [{ path: filePath, mode: "append", text: section }], preview: section };
 }
 
@@ -258,7 +200,7 @@ async function planAppendSystem(paths: DistillPaths, lesson: WritableLesson, now
     throw new Error(`An append_system lesson targets ${APPEND_SYSTEM_TARGET}, not "${lesson.target}".`);
   }
   const filePath = appendSystemPath(paths);
-  const section = renderLessonSection(lesson, now);
+  const section = renderLessonSection(lesson);
   return {
     target: APPEND_SYSTEM_TARGET,
     writes: [{ path: filePath, mode: (await fileExists(filePath)) ? "append" : "create", text: section }],
@@ -336,19 +278,20 @@ async function refuseSymlinkTrail(target: string): Promise<void> {
   }
 }
 
-/** The dated section an approved lesson appends; hand-written prose above it is never touched. */
-export function renderLessonSection(lesson: WritableLesson, now: Date): string {
-  const date = now.toISOString().slice(0, 10);
-  const source = lesson.provenance
-    ? `\n_Distill lesson \`${lesson.id}\` from session \`${lesson.provenance.sessionId}\`; cited records and excerpts in \`.omp/distill/lessons/${lesson.id}.json\`._\n`
-    : "";
-  return [`## Lesson — ${date}`, "", lesson.body.trim(), ...(source === "" ? [""] : [source])].join("\n");
+/**
+ * What an approved lesson appends to a file that already holds content: the lesson's own text, and
+ * nothing else. The dated heading and provenance footnote it used to carry were decoration inside a
+ * surface the next session reads and pays for by the token; where a lesson came from is in the
+ * ledger's decision row, which is where provenance belongs.
+ */
+export function renderLessonSection(lesson: WritableLesson): string {
+  return `\n${lesson.body.trim()}\n`;
 }
 
 /** The skill's pointer to a reference: continued under `## References` when that is its last section. */
 async function renderReferencePointer(skillPath: string, name: string, title: string, now: Date): Promise<string> {
   const content = (await readText(skillPath)) ?? "";
-  const line = `- [\`references/${name}.md\`](references/${name}.md) — ${title.trim()} _(distill, ${now.toISOString().slice(0, 10)})_`;
+  const line = `- [\`references/${name}.md\`](references/${name}.md) — ${title.trim()}`;
   const hasReferencesSection = /^##\s+References\s*$/m.test(content);
   const referencesIsLast = hasReferencesSection && content.trimEnd().lastIndexOf("## References") > content.trimEnd().lastIndexOf("\n## ");
   return referencesIsLast ? `${line}\n` : `## References\n\n${line}\n`;

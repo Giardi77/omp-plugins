@@ -23,6 +23,12 @@ A rule carries `applies_to`, a one-line trigger in the host's own frontmatter vo
 description-listed rule). An existing rule's frontmatter is the operator's; a patch that asks for a
 different trigger is refused rather than silently merged, and adding to the body is unchanged.
 
+**Amended 2026-09-24**: what an approved lesson writes is its own text, nothing else. The dated
+`## Lesson — <date>` heading and the provenance footnote it used to append are gone, and so is the
+`_(distill, <date>)_` on a reference pointer: those surfaces are read by the next session, which pays
+for every token, and the ledger's decision row already records which lesson wrote what, from which
+session, under which prompt. Provenance belongs where it is asked for, not in the instruction.
+
 **Considered Options**: teaching the model the raw frontmatter and letting it write whole files —
 rejected, the plugin would be validating model-authored YAML for no gain, and the review window
 would show a file rather than a lesson; a free-text `target` field with no vocabulary — rejected,

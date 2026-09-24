@@ -628,12 +628,13 @@ describe("the distill command", () => {
     await captureStdout(() => commands.distill!.handler("review", ctx));
 
     expect(quit).toBe(true);
-    // The decision landed in the surface the diff pointed at: the body appended, with its provenance.
+    // The decision landed in the surface the diff pointed at: the lesson's own text, appended, and
+    // nothing else — no dated heading, no provenance footnote in a file the next session reads.
     const written = await Bun.file(path.join(project, ".omp", "skills", "retry-helper", "SKILL.md")).text();
     expect(written).toContain("Retries exist.");
-    expect(written).toContain("## Lesson — 2026-09-24");
     expect(written).toContain("Sleep at least 250ms between retry attempts; 100ms flaps under CI load.");
-    expect(written).toContain("_Distill lesson `abc123`");
+    expect(written).not.toContain("## Lesson");
+    expect(written).not.toContain("_Distill lesson");
     expect((await listLessons(paths))[0]?.state).toBe("approved");
   });
 

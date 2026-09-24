@@ -81,7 +81,7 @@ function lesson(id: string, overrides: Partial<StoredLesson> = {}): StoredLesson
 function entry(id: string, overrides: Partial<ReviewEntry> = {}): ReviewEntry {
   return {
     lesson: lesson(id),
-    preview: `## Lesson — 2026-09-24\n\nBody of ${id}.\n`,
+    preview: `Body of ${id}.\n`,
     ...overrides,
   };
 }
@@ -94,7 +94,7 @@ interface Sit extends Pending {
   renders: number;
   /** The whole rendered window, borders and all. */
   text(width?: number): string;
-  /** Lessons currently listed as rows: rows spell it `kind · target`, the detail pane `target: `. */
+  /** Lessons currently listed as rows, in row order. */
   listed(): string[];
 }
 
@@ -140,10 +140,7 @@ function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}): S
       return renders;
     },
     text: (width = WIDTH) => window.render(width).join("\n"),
-    listed: () => {
-      const rendered = window.render(WIDTH).join("\n");
-      return IDS.filter(id => rendered.includes(`skill · target-${id}`));
-    },
+    listed: () => window.undecided,
   };
 }
 
@@ -213,15 +210,15 @@ describe("ReviewWindow", () => {
     expect(review.listed()).toEqual(["one", "two"]);
     expect(rendered).toContain("skill · target: target-one");
     expect(rendered).toContain("Title one");
+    // The lesson itself, then why it is worth keeping — the rationale is invisible everywhere else,
+    // since the surfaces only ever get the body.
+    expect(rendered).toContain("The lesson:");
     expect(rendered).toContain("Body of one.");
-    // The rationale is invisible everywhere else — the surface gets title and body — so review is
-    // the only place the reviewer can read why the lesson is worth keeping.
-    expect(rendered).toContain("why keep it:");
+    expect(rendered).toContain("Why keep it:");
     expect(rendered).toContain("the same mistake came back three times");
     // The record ids always; the excerpts they stand for are one key away.
     expect(rendered).toContain("evidence: trace-one#record-1");
     expect(rendered).not.toContain("Excerpt of one.");
-    expect(rendered).toContain("## Lesson — 2026-09-24");
     expect(rendered).toContain("↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · q quit");
 
     // Only the selected lesson is detailed.
@@ -321,27 +318,12 @@ describe("ReviewWindow", () => {
 
     expect(review.accepted).toEqual([]);
     expect(review.listed()).toEqual(["one"]);
-    expect(review.text()).toContain("skill · target-one · blocked");
+    // The row marks it blocked; the detail pane says why, twice: once as the warning, once as the
+    // refusal when the operator presses accept anyway.
+    expect(review.text()).toContain("blocked");
+    expect(review.text()).toContain("skill · target: target-one");
     expect(review.text()).toContain("blocked: no target skill in this project");
     expect(review.text()).toContain("cannot write: no target skill in this project");
-  });
-
-  test("shows the overlap check's lines when the entry carries them", () => {
-    const review = sit([
-      entry("one", { context: "existing skills: alpha, beta\nexisting agents: reviewer" }),
-    ]);
-    const rendered = review.text();
-    expect(rendered).toContain("overlap check:");
-    expect(rendered).toContain("existing skills: alpha, beta");
-    expect(rendered).toContain("existing agents: reviewer");
-
-    // Under the lesson itself: what it changes and why come first, the overlap check is a caveat.
-    const lines = review.window.render(WIDTH);
-    const at = (needle: string) => lines.findIndex(line => line.includes(needle));
-    expect(at("skill · target: target-one")).toBeLessThan(at("Body of one."));
-    expect(at("Body of one.")).toBeLessThan(at("existing skills: alpha, beta"));
-
-    expect(sit([entry("one")]).text()).not.toContain("overlap check");
   });
 
   test("never lists an already decided lesson", () => {
@@ -562,7 +544,7 @@ describe("runReview", () => {
 
     expect(terminal.options()).toEqual({ overlay: true });
     const mounted = terminal.mounted();
-    expect(mounted.render(WIDTH).join("\n")).toContain("skill · target-two");
+    expect(mounted.render(WIDTH).join("\n")).toContain("Title two");
 
     mounted.handleInput(DOWN);
     mounted.handleInput("a");

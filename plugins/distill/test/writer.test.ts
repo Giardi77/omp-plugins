@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { distillPaths, setupProject, type DistillPaths } from "../src/config";
 import type { StoredLesson } from "../src/lessons";
-import { agentInventory, applyWrite, planWrite, readInventory, ruleInventory, skillInventory } from "../src/writer";
+import { applyWrite, planWrite } from "../src/writer";
 import { makeTempDir } from "./fixtures";
 
 function lesson(overrides: Partial<StoredLesson> = {}): StoredLesson {
@@ -43,7 +43,7 @@ async function writeFile(filePath: string, content: string): Promise<string> {
 const skillPath = (paths: DistillPaths, name: string) => path.join(paths.projectRoot, ".omp", "skills", name, "SKILL.md");
 
 describe("skills", () => {
-  test("an existing slug is patched with a dated section", async () => {
+  test("an existing slug is patched with the lesson, undecorated", async () => {
     const paths = await project();
     const filePath = await writeFile(skillPath(paths, "retry-helper"), "---\nname: retry-helper\ndescription: Retries\n---\n\nHand-written prose.\n");
 
@@ -53,8 +53,9 @@ describe("skills", () => {
     expect(plan.writes).toHaveLength(1);
     expect(plan.writes[0]?.mode).toBe("append");
     expect(plan.writes[0]?.path).toBe(filePath);
-    expect(plan.preview).toContain("## Lesson — 2026-09-24");
-    expect(plan.preview).toContain("Sleep at least 250ms between retry attempts.");
+    // The lesson's own text, undecorated: a surface the next session reads, and the ledger already
+    // records which lesson wrote it and when.
+    expect(plan.preview).toBe("\nSleep at least 250ms between retry attempts.\n");
   });
 
   test("a missing slug is minted, with a description or not at all", async () => {
@@ -95,7 +96,7 @@ describe("skill references", () => {
     expect(plan.writes[0]?.path).toBe(path.join(paths.projectRoot, ".omp", "skills", "retry-helper", "references", "ci-load.md"));
     expect(plan.writes[0]?.text).toBe("# CI load\n\nSleep at least 250ms between retry attempts.\n");
     expect(plan.writes[1]?.path).toBe(filePath);
-    expect(plan.writes[1]?.text).toBe("## References\n\n- [`references/ci-load.md`](references/ci-load.md) — CI load _(distill, 2026-09-24)_\n");
+    expect(plan.writes[1]?.text).toBe("## References\n\n- [`references/ci-load.md`](references/ci-load.md) — CI load\n");
     expect(plan.preview).toContain("── ");
 
     await applyWrite(paths, plan);
@@ -172,7 +173,7 @@ describe("rules", () => {
     ).rejects.toThrow("fired by different conditions");
 
     await applyWrite(paths, agreeing);
-    expect(await Bun.file(filePath).text()).toContain("Never force-push.\n\n## Lesson —");
+    expect(await Bun.file(filePath).text()).toContain("Never force-push.\n\n\nSleep at least 250ms between retry attempts.\n");
   });
 
   test("a rule name outside the allowlist is refused, and an empty title never mints a description", async () => {
@@ -194,7 +195,7 @@ describe("agent prompts and APPEND_SYSTEM.md", () => {
     const agentPath = await writeFile(path.join(paths.projectRoot, ".omp", "agents", "reviewer.md"), "# Reviewer\n\nBe terse.\n");
     const plan = await planWrite(paths, lesson({ kind: "agent_prompt", target: "reviewer" }));
     expect(plan.writes[0]?.path).toBe(agentPath);
-    expect(plan.preview).toContain("## Lesson —");
+    expect(plan.preview).toBe("\nSleep at least 250ms between retry attempts.\n");
 
     await expect(planWrite(paths, lesson({ kind: "agent_prompt", target: "REVIEWER!" }))).rejects.toThrow(
       "not a usable agent name",
@@ -217,27 +218,6 @@ describe("agent prompts and APPEND_SYSTEM.md", () => {
   });
 });
 
-describe("the inventory", () => {
-  test("reports skills, agents, rules and whether APPEND_SYSTEM.md exists", async () => {
-    const paths = await project();
-    await writeFile(skillPath(paths, "retry-helper"), "---\nname: retry-helper\ndescription: Retry advice\n---\n");
-    await writeFile(path.join(paths.projectRoot, ".omp", "agents", "reviewer.md"), "# Reviewer\n");
-    await writeFile(path.join(paths.projectRoot, ".omp", "rules", "no-force-push.md"), "---\ndescription: x\n---\n");
-
-    expect(await skillInventory(paths)).toEqual([
-      { name: "retry-helper", description: "Retry advice", filePath: skillPath(paths, "retry-helper") },
-    ]);
-    expect(await agentInventory(paths)).toEqual(["reviewer"]);
-    expect(await ruleInventory(paths)).toEqual(["no-force-push"]);
-    expect(await readInventory(paths)).toEqual({
-      skills: [{ name: "retry-helper", description: "Retry advice", filePath: skillPath(paths, "retry-helper") }],
-      agents: ["reviewer"],
-      rules: ["no-force-push"],
-      appendSystem: false,
-    });
-  });
-});
-
 describe("applying a write", () => {
   test("a patch appends after the hand-written prose and leaves it intact", async () => {
     const paths = await project();
@@ -248,7 +228,7 @@ describe("applying a write", () => {
 
     const content = await Bun.file(filePath).text();
     expect(content.startsWith(original)).toBe(true);
-    expect(content).toContain("Hand-written prose.\n\n## Lesson —");
+    expect(content).toContain("Hand-written prose.\n\n\nSleep at least 250ms between retry attempts.\n");
     expect(result.written).toEqual([filePath]);
   });
 

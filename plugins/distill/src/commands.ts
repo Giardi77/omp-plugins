@@ -48,7 +48,7 @@ import { listProjectSessions, sessionTraceIds, type SessionCandidate } from "./s
 import { CLI_THINKING_LEVELS, parseCliThinkingLevel } from "./thinking";
 import { renderInventory, type TraceBundle } from "./trace";
 import { fileExists, messageOf } from "./util";
-import { applyWrite, planWrite, readInventory } from "./writer";
+import { applyWrite, planWrite } from "./writer";
 
 /**
  * The seven commands of the loop (D11). Each one is a thin flow over the modules that own
@@ -721,19 +721,11 @@ async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPath
 }
 
 async function reviewEntry(paths: DistillPaths, lesson: StoredLesson): Promise<ReviewEntry> {
-  const inventory = await readInventory(paths);
-  const context = [
-    `existing skills: ${inventory.skills.length === 0 ? "none" : inventory.skills.map(skill => skill.name).join(", ")}`,
-    `existing agents: ${inventory.agents.length === 0 ? "none" : inventory.agents.join(", ")}`,
-    `existing rules: ${inventory.rules.length === 0 ? "none" : inventory.rules.join(", ")}`,
-    `APPEND_SYSTEM.md: ${inventory.appendSystem ? "present" : "absent"}`,
-  ].join("\n");
-
   try {
     const plan = await planWrite(paths, lesson);
-    return { lesson, preview: plan.preview, context, changes: await planFileChanges(paths, plan.writes) };
+    return { lesson, preview: plan.preview, changes: await planFileChanges(paths, plan.writes) };
   } catch (error) {
-    return { lesson, preview: "", context, blocked: messageOf(error) };
+    return { lesson, preview: "", blocked: messageOf(error) };
   }
 }
 

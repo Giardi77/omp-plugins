@@ -37,6 +37,11 @@ Two decisions inside that are worth recording, because both are deliberate devia
   The window asks for a fresh plan after each accept or deny, so what is on screen is what is on
   disk plus what is about to be written.
 
+The overlap check that used to sit in the pane — every skill, agent and rule in the project, listed
+under each lesson — is gone: it was distill's own invention, it answered a question the evaluator
+already answers when it chooses patch-versus-mint, and beside a diff it read as noise. The operator
+said it should not exist, and it does not.
+
 **Considered Options**: keep one lesson's raw write text as the pane (deleted: it shows the bytes
 without the file they land in, which is the one thing an operator approving a write needs);
 side-by-side diffs (rejected: wide, and nothing is ever removed here, so the left column would be
