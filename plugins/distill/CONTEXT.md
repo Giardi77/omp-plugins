@@ -88,9 +88,9 @@ session at a time.
 _Avoid_: batch, crawl, job
 
 **Evaluation**:
-One evaluator run over the traces it was given, yielding zero or more proposed lessons. A session is
-evaluated as one run over its whole bundle, and that run records its own outcome against the traces it
-carried.
+One evaluator run over the traces it was given, yielding zero or more proposed lessons. A session's
+whole bundle goes in one run, and that run records its own outcome against the traces it carried; a
+failed run leaves them eligible, so one session can be evaluated more than once.
 _Avoid_: job, scoring, pass
 
 **Evaluator**:

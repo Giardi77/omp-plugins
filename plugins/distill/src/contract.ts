@@ -22,6 +22,8 @@ import {
  */
 
 export const ANSWER_CONTRACT_VERSION = 1;
+/** A body longer than this is refused: the four parts fit in a few lines, and every extra one is noise. */
+export const MAX_LESSON_BODY_CHARS = 1_200;
 export const PROPOSE_LESSONS_TOOL = "propose_lessons";
 export const GET_TRACE_TOOL = "get_trace";
 
@@ -67,7 +69,10 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `verdict: one line stating what this session taught, or why nothing in it is worth keeping.`,
   `lessons: the lessons worth keeping, or [] when the session teaches nothing reusable. One lesson is one durable instruction for future agent sessions in this project.`,
   ``,
-  `Evidence. Every lesson cites records you read with \`get_trace\`, as \`trace:record\` — the trace id from the payload, the record id from the section's brackets. A citation that does not resolve against the session is rejected with an error and you are asked again: invented evidence never reaches review. Never quote text into the body — the plugin extracts the cited records' own text verbatim, so the body stays a statement of the lesson.`,'',
+  `A body carries four things, in this order: the problem (what goes wrong), the one moment in this session where it bit (the command, file or edit, and what it returned), the instruction, and the cost of ignoring it. Three to six lines, at most ${MAX_LESSON_BODY_CHARS} characters. The instance is the point: a lesson that states a rule nothing is anchored to is one nobody recognises when they are standing in it.`,
+  `rationale: your note to the reviewer — why this is worth keeping and what makes it true. Never why you chose this kind or this target; the write shows that.`,
+  ``,
+  `Evidence. Every lesson cites records you read with \`get_trace\`, as \`trace:record\` — the trace id from the payload, the record id from the section's brackets. A citation that does not resolve against the session is rejected with an error and you are asked again: invented evidence never reaches review. Never paste a record into the body — the plugin extracts the cited records' own text verbatim for the reviewer, so the body names the moment in a clause and moves on.`,'',
   `Tool results are summarised: their first line and total size, not their output. Each trace names the transcript file on disk; its records are the session's own words, so prefer reading them with \`get_trace\` over pulling a whole transcript.`,
   ``,
   `Where a lesson goes. Pick the narrowest surface that will hold it, and edit before you add:`,
@@ -158,7 +163,7 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
           body: {
             type: "string",
             description:
-              "The lesson itself, self-contained: a future agent reads it without this session. Never a quote of the trace.",
+              `The lesson itself, self-contained: the problem, the moment in this session where it bit, the instruction, and the cost of ignoring it — in that order, at most ${MAX_LESSON_BODY_CHARS} characters. Never a paste of the trace.`,
           },
           target: {
             type: "string",
@@ -170,7 +175,10 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
             description:
               "Rules only: what fires the rule. \"always\", \"globs:**/*.sql\", \"condition:<regex>\", \"ast:<pattern>\", or \"agent:<name>\". Omit and the rule is listed by description only.",
           },
-          rationale: { type: "string", description: "Why this is worth keeping, in one or two sentences." },
+          rationale: {
+            type: "string",
+            description: "Why this is worth keeping and what makes it true — never why this kind or target was chosen.",
+          },
           citations: {
             type: "array",
             minItems: 1,
@@ -282,6 +290,11 @@ export function parseAnswer(raw: unknown): AnswerParse {
       const value = typeof lesson[field] === "string" ? (lesson[field] as string).trim() : "";
       if (value === "") errors.push(`${where}.${field} must be a non-empty string`);
       strings[field] = value;
+    }
+    if ((strings.body ?? "").length > MAX_LESSON_BODY_CHARS) {
+      errors.push(
+        `${where}.body is ${(strings.body ?? "").length} characters; keep it under ${MAX_LESSON_BODY_CHARS} — problem, instance, instruction, cost, and nothing else`,
+      );
     }
     for (const problem of targetProblems(kind, strings.target ?? "")) errors.push(`${where}.${problem}`);
     const appliesTo = typeof lesson.applies_to === "string" ? lesson.applies_to.trim() : undefined;

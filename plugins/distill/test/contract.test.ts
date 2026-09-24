@@ -3,6 +3,7 @@ import { loadSession, resolveBranch } from "../src/store";
 import { buildBundle } from "../src/trace";
 import {
   ANSWER_CONTRACT_VERSION,
+  MAX_LESSON_BODY_CHARS,
   parseAppliesTo,
   type ProposedLesson,
   targetProblems,
@@ -78,7 +79,10 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("once, as your final action");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("trace:record");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(".omp/distill/lessons/");
-    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("Never quote text into the body");
+    // A lesson that reads well is the point: the body's four parts, in order, and the cap.
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the problem (what goes wrong)");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the cost of ignoring it");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain(`at most ${MAX_LESSON_BODY_CHARS} characters`);
   });
 
   test("every surface OMP offers is a kind, and each kind checks its target", () => {
@@ -132,6 +136,10 @@ describe("the propose_lessons contract", () => {
       [{ verdict: "x" }, "lessons"],
       [{ verdict: "x", lessons: [{ ...validLesson, kind: "rewrite_everything" }] }, "kind must be one of"],
       [{ verdict: "x", lessons: [{ ...validLesson, body: "   " }] }, "body must be a non-empty string"],
+      [
+        { verdict: "x", lessons: [{ ...validLesson, body: "x".repeat(MAX_LESSON_BODY_CHARS + 1) }] },
+        "keep it under",
+      ],
       [{ verdict: "x", lessons: [{ ...validLesson, citations: [] }] }, "citations must name at least one"],
       [{ verdict: "x", lessons: [{ ...validLesson, citations: ["not-a-qualified-id"] }] }, "malformed id"],
       [{ verdict: "x", lessons: [{ ...validLesson, target: "Bad Name" }] }, "target must be a skill slug"],

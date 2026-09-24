@@ -772,7 +772,6 @@ async function writeFailureDump(
   reason: string,
   payload: string,
   reads: string[],
-  extra: Record<string, unknown> = {},
 ): Promise<string> {
   await fs.mkdir(paths.tmpDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -786,7 +785,6 @@ async function writeFailureDump(
     payloadChars: payload.length,
     truncated: payload.length > MAX_DUMPED_PAYLOAD_CHARS,
     reads,
-    ...extra,
     payload: payload.slice(0, MAX_DUMPED_PAYLOAD_CHARS),
   };
   await Bun.write(dumpPath, `${JSON.stringify(dump, null, 2)}\n`);

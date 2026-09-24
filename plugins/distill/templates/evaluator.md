@@ -74,9 +74,42 @@ checkable, durable.
 Bad: "The operator prefers tabs." — a style preference the project has not stated anywhere
 else.
 
+## How a lesson reads
+
+Write it for someone who never saw this session, in this order, in three to six lines, every
+sentence doing work:
+
+1. **The problem** — what goes wrong, in one sentence. Not what the agent did; the trap.
+2. **Where it bit here** — the one concrete moment from this session: the command, the file,
+   the edit, and what it printed or returned. One clause, quoted the way it happened. This is
+   what makes the lesson believable and findable.
+3. **The instruction** — what to do instead, stated so it can be followed without you.
+4. **Why it must be followed** — the cost of getting it wrong, in as few words as it takes.
+
+Bad: "A test command issued from the repo root finds no tests and reports an empty pass,
+which looks like success but proves nothing. Change into packages/core before running the
+tests, so a zero-test run is never mistaken for a green suite."
+
+Good: "Running the suite from the repo root finds nothing and reports a pass, so a green run
+proves nothing (`bun test` at the root printed `0 pass — no tests found`). Run it from
+packages/core — a root-level run will report success on a broken repo."
+
+The bad one states a rule nothing is anchored to. The good one names the moment, the
+command, and what it printed, so the next agent recognises the trap when it is standing in
+it. Keep it short: the whole lesson — problem, instance, instruction, why — fits in a few
+lines, and everything that is not one of those four parts is noise.
+
+The `rationale` field is not part of the lesson a future agent reads. It is your note to the
+reviewer: why this is worth keeping at all, and what in the session tells you it is true.
+Never spend it on why you chose this kind or this target — the write itself shows that.
+
 ## What you see
 
-You are handed the session's traces: the parent session and its subagents, each record
-carrying the id citations must name. You have read, glob and grep with this project as your
-working directory, so its skills, its agent prompts and its source are yours to check. The
-judgement itself goes through one tool call, whose description states the mechanics.
+You are handed an inventory of the session's traces — the parent session and each of its
+subagents, with the records each one holds — and you read them yourself with `get_trace`: a
+section at a time, by range, by pattern, or with a `jq` query when you know exactly what you
+are looking for. Read what the judgement needs, and read around a quiet correction before
+dismissing it: the small thing that changed someone's mind is usually where the lesson is.
+You also have read, glob and grep with this project as your working directory, so its skills,
+its agent prompts and its source are yours to check. The judgement itself goes through one
+tool call, whose description states the mechanics.

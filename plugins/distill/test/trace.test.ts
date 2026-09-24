@@ -159,7 +159,8 @@ describe("trace sections", () => {
     expect(matched.text).toContain("[1000000a] toolResult edit error");
     expect(matched.text).toContain("end of what you asked for");
 
-    // More matches than the limit: the footer says where in the *matches* to continue.
+    // More matches than the limit: the footer names the next match by its record ordinal, which is
+    // what "from" means in both modes.
     const many = renderTraceSection(trace, OPTIONS, { pattern: "retry", limit: 1 });
     expect(many.matched).toBeGreaterThan(1);
     expect(many.text).toContain('next: get_trace trace="01a0ced4" pattern="retry" from=');

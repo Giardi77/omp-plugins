@@ -19,12 +19,14 @@ hides the only signal that distinguishes a boring corpus from a broken evaluator
 stay eligible the way technical faults do — rejected, because it re-pays for the same dud traces on
 every scan, which is the flooding worry inverted.
 
-**Amended 2026-09-24**: the recorded upgrade path was taken, because a real session hit the limit —
-a 3.2 MB transcript whose 10 traces came to 3.7 M characters, past the 1 M-token window of the
-model it named. A scan now sends the whole bundle while it fits, and otherwise one trace per
-evaluation, which is also what the per-trace retirement in this ADR already implied: each run
-records its own outcome and retires exactly the trace it covered. A trace that does not fit on its
-own still fails loudly with its size and stays eligible; no payload is ever truncated.
+**Amended 2026-09-24, then superseded in part by ADR-0013**: the recorded upgrade path was taken
+briefly, because a real session hit the limit — a 3.2 MB transcript whose 10 traces came to 3.7 M
+characters, past the 1 M-token window of the model it named. Splitting by trace was the answer for
+one release; the inventory payload (ADR-0013) made it dead code, and the planner, the oversized
+branch and the payload budget were deleted in 0.4.0. What survives from this paragraph is the part
+that always mattered: no payload is ever truncated, and a payload the model refuses fails loudly and
+stays eligible. It is no longer split, because an inventory of a session's traces is small enough
+that only a pathological trace count could exceed a window at all.
 
 **Consequences**: the evaluator-prompt hash stays in the ledger as provenance rather than as a key, so
 `/distill status` can report "N traces were evaluated under an earlier `evaluator.md`" — a prompt
