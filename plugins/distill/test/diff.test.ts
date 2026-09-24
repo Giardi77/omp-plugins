@@ -86,7 +86,9 @@ describe("rendering a change", () => {
     // The long third line wraps under its own text rather than being clipped: it is the lesson, and
     // the operator is approving exactly what it says.
     expect(lines[3]).toBe("A3 + a line that is going to be cut");
-    expect(lines[4]?.startsWith("A    a line")).toBe(true);
+    // The tail of that long line sits on the next row, indented past the number and gutter.
+    expect(lines[4]?.startsWith("A    ")).toBe(true);
+    expect(lines[4]).toContain("because it is far too long");
     for (const line of lines) expect(line.replace(/^[ACM]/, "").length).toBeLessThanOrEqual(40);
   });
 
