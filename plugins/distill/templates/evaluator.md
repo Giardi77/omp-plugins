@@ -92,6 +92,14 @@ sentence doing work:
 Three parts, in that order. The cost of getting it wrong is not a fourth: it belongs in
 `rationale`, where the reviewer reads it and the next session's context never pays for it.
 
+A rule, an agent prompt and `APPEND_SYSTEM.md` are the exception. They are not opened on demand —
+they are injected, into a stream the moment a condition matches or into every request that agent
+makes — so their body is the instruction alone: a few lines, and rarely more than two. The problem,
+the instance and the figures go in `rationale`, with everything else only the reviewer reads. A rule
+that explains itself to the agent it interrupts charges that explanation at every match, which is
+the cost this project is trying not to accumulate. If the instruction needs a paragraph to be
+followed, it is two rules, or a skill.
+
 Bad: "A test command issued from the repo root finds no tests and reports an empty pass,
 which looks like success but proves nothing. Change into packages/core before running the
 tests." — a rule with nothing to recognise it by, and the cost padded on the end.
@@ -104,6 +112,11 @@ The bad one states a rule nothing is anchored to. The good one names the moment,
 command, and what it printed, so the next agent recognises the trap when it is standing in
 it. Keep it short: the whole lesson — problem, instance, instruction, why — fits in a few
 lines, and everything that is not one of those four parts is noise.
+
+That good one is a skill's body. The same lesson as a rule is its last sentence alone —
+"Run it from packages/core — a root-level run will report success on a broken repo." — because the
+agent that triggers it has already run the command, and the printed output belongs in `rationale`.
+Write the instruction you would want shouted at you mid-command, not the case for it.
 
 The `rationale` field is not part of the lesson a future agent reads. It is what the reviewer
 reads: why the fix must be applied — the cost of skipping it — and what in this session tells

@@ -88,6 +88,10 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("why the fix must be applied");
     // Grounding: the citations have to be the moment the lesson came from.
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("citations do not show it is not grounded");
+    // And the one exception: what is injected takes the instruction alone — its length is the
+    // operator's call, in the project's own prompt (ADR-0018).
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the body is the instruction alone");
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("stated in its own evaluator prompt");
   });
 
   test("a lesson may leave its body empty only when it is taking lines out", () => {
@@ -108,6 +112,27 @@ describe("the propose_lessons contract", () => {
     // Whitespace-only `removes` is still not a removal.
     const blank = parseAnswer({ verdict: "nothing", lessons: [{ ...validLesson, body: "", removes: "   " }] });
     expect(blank.ok).toBe(false);
+  });
+
+  test("an injected body is not capped: the shape is the operator's call", () => {
+    // The cap was written, then rejected: "no i don't like the hard cap. we can just instruct the
+    // evaluator in the evaluator.md prompt". The parser holds the contract, not the taste — a rule
+    // body past a few hundred characters is accepted here and caught by the reviewer, whose
+    // `removes` takes it back out (ADR-0016, ADR-0018).
+    const story =
+      "It bit on a sweep: the brief said one request per second, the command carried no `-rl`, and it fired 81 requests in 13.31 s. ";
+    const body = story.repeat(4);
+    expect(body.length).toBeGreaterThan(400);
+
+    const rule = parseAnswer({
+      verdict: "cap the command, not the brief",
+      lessons: [
+        { ...validLesson, kind: "rule", target: "rate-cap-in-command", applies_to: "condition:\\bhttpx\\b", body },
+      ],
+    });
+
+    expect(rule.ok).toBe(true);
+    expect(rule.ok && rule.answer.lessons[0]?.body).toContain("81 requests");
   });
 
   test("a reference must open with the sentence that says what it explains", () => {

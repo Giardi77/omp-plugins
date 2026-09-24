@@ -37,6 +37,12 @@ cannot be written; keeping `RULES.md` as a target — rejected as a third spelli
 `alwaysApply` for every rule — rejected, an always-on rule's full text rides every request, which
 is exactly the bloat the operator asked to avoid.
 
+**Amended 2026-09-25**: the two classes of surface take different bodies. What is *read* — a skill or a
+reference — keeps the problem, the moment it bit and the instruction, because the session that opens it
+chose to and needs the instance to recognise the trap. What is *injected* — a rule, an agent prompt, the
+append layer — is the instruction alone: that text lands in a context nobody opened on purpose, at every
+match, and the project's own prompt says how short it is (ADR-0018).
+
 **Consequences**: the answer contract's kind list is a live interface with the host's discovery —
 `rule` frontmatter keys and the `references/` convention are mirrored from the host's
 `RuleFrontmatter` and skill scanning, so a host change is a plugin change (the mirrors live in

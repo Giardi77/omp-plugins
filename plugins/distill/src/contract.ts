@@ -77,6 +77,7 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `lessons: the lessons worth keeping, or [] when the session teaches nothing reusable. One lesson is one durable instruction for future agent sessions in this project.`,
   ``,
   `A body carries three things, in this order: the problem (what goes wrong), the one moment in this session where it bit (the command, file or edit, and what it returned), and the instruction. Three to six lines, at most ${MAX_LESSON_BODY_CHARS} characters. The instance is the point: a lesson that states a rule nothing is anchored to is one nobody recognises when they are standing in it.`,
+  `Three kinds are the exception, because their body is injected rather than read: a \`rule\` fires into a future stream when its trigger matches, and \`append_system\` and \`agent_prompt\` ride the project's or that agent's every request. For those the body is the instruction alone, and the problem, the moment it bit and the cost go in \`rationale\`, where the reviewer reads them and no future context pays for them. How short that is — and it is short — is the project's call, stated in its own evaluator prompt.`,
   `rationale: why the fix must be applied — the cost of skipping it next time — and what makes this true. The reviewer reads it before deciding, so it is yours to argue in; it is never a note about which kind or target you chose.`,
   ``,
   `removes: lines to take *out* of the target file — a rule that no longer holds, the same instruction twice, a stale workaround, a paragraph that costs more than it returns. Quote them as you read them; the plugin finds those lines ignoring indentation and removes exactly them, putting the body where they were (leave the body empty to remove and add nothing). A surface that has grown bloated is a lesson: trim it rather than adding to it.`,
@@ -100,15 +101,19 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `  whether to open it. Its body must open with one sentence saying what the file covers and the`,
   `  situation that should send an agent here — that sentence is what a search or a grep lands on.`,
   `- \`rule\` — behaviour that can be stated exactly for a situation you can name. \`target\` is the`,
-  `  rule's name and \`applies_to\` says what fires it:`,
-  `    "always"            — every request, full text injected (the loudest rule; use it sparingly)`,
-  `    "globs:<glob>"      — work on paths matching, e.g. "globs:**/*.sql"`,
-  `    "condition:<regex>" — the stream matches, e.g. "condition:\\bterraform apply\\b"`,
-  `    "ast:<pattern>"     — an edit or write whose payload matches an ast-grep pattern`,
+  `  rule's name and \`applies_to\` says what fires it. Firing is not free: the host interrupts the`,
+  `  stream and re-asks with the rule's body in hand, so the body is context a future session pays`,
+  `  for on every match — and the trigger is the whole cost model:`,
+  `    "always"            — injected into every request (the loudest rule; use it sparingly)`,
+  `    "globs:<glob>"      — injected when the work touches a matching path, e.g. "globs:**/*.sql"`,
+  `    "condition:<regex>" — injected when the stream matches, e.g. "condition:\\bterraform apply\\b"`,
+  `    "ast:<pattern>"     — injected when an edit or write payload matches an ast-grep pattern`,
   `    "agent:<name>"      — one agent, e.g. "agent:main" or a subagent's name`,
-  `    absent              — listed by description; the agent pulls it in when it looks relevant`,
-  `  Prefer the narrowest trigger that is exact: an "always" rule nobody needs is context every`,
-  `  request pays for.`,
+  `    absent              — never injected: listed by description, and the agent opens it when it`,
+  `                          looks relevant. The cheapest rule there is.`,
+  `  Prefer the narrowest trigger that is exact, and make it match the thing you mean: a condition`,
+  `  naming a tool fires on prose about the tool too, and every false match is context spent on a`,
+  `  rule that did not apply.`,
   `- \`agent_prompt\` — the behaviour belongs to a subagent. \`target\` is its name under`,
   `  .omp/agents/; that file must already exist, and the body is appended to it.`,
   `- \`append_system\` — something permanent the main agent must always respect. \`target\` is`,
@@ -189,7 +194,7 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
           body: {
             type: "string",
             description:
-              `The lesson itself, self-contained: the problem, the one moment in this session where it bit, then the instruction — in that order, at most ${MAX_LESSON_BODY_CHARS} characters. Never a paste of the trace.`,
+              `The lesson itself, at most ${MAX_LESSON_BODY_CHARS} characters. Read kinds (skill, skill_reference): the problem, the one moment in this session where it bit, then the instruction, in that order. Injected kinds (rule, agent_prompt, append_system): the instruction alone, with the problem, the instance and the cost in rationale. Never a paste of the trace.`,
           },
           target: {
             type: "string",
@@ -199,7 +204,7 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
           applies_to: {
             type: "string",
             description:
-              "Rules only: what fires the rule. \"always\", \"globs:**/*.sql\", \"condition:<regex>\", \"ast:<pattern>\", or \"agent:<name>\". Omit and the rule is listed by description only.",
+              "Rules only: what fires the rule. \"always\", \"globs:**/*.sql\", \"condition:<regex>\", \"ast:<pattern>\", or \"agent:<name>\". The body is injected every time it fires; omit the trigger and the rule is only listed by description, never injected.",
           },
           removes: {
             type: "string",
