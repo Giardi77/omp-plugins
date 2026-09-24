@@ -27,10 +27,9 @@ lines is a taste decision being smuggled into a validator. Leaving the shape uns
 model — rejected: the same description that asked for three to six lines produced 800-character rule
 bodies, so the shape is stated, just not enforced.
 
-The four host keys a lesson cannot write stay out of the vocabulary for a structural reason:
-`applies_to` is one string holding one trigger, so a trigger *plus* a modifier has no room there. That
-is a new lesson field, a schema change and an `ANSWER_CONTRACT_VERSION` bump — the size of ADR-0016,
-not a line in a description. For the record, in case that field is ever added:
+Two host keys a lesson cannot write stay out of the vocabulary — and two more were held out until
+`applies_to` became a clause list, because one string had no room for a trigger *plus* a modifier
+(ADR-0019). For the record:
 
 - `scope` (`text` | `thinking` | `tool` | `toolcall` | `tool:<name>(<glob>)`) — which streams the
   condition is matched against. It is the precision half of the trigger, and the half that decides

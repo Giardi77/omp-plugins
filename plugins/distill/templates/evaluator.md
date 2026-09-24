@@ -47,8 +47,9 @@ something close gets the change, never a duplicate.
 
   - `condition` — a regex the stream has to match. `astCondition` — an ast-grep pattern the
     payload of an edit or write has to match. `alwaysApply` — no matching at all.
-  - `globs` — the paths the rule is about; `agents` — which agent it applies to (`main` for
-    the top-level session). Neither one fires the rule; they narrow where it is true.
+  - `globs` — the paths the rule is about: on its own it only lists the rule, with the glob shown
+    beside its description, and with a condition it narrows when that condition applies. `agents` —
+    which agent it applies to (`main` for the top-level session). Neither one fires the rule.
   - `scope` — which streams `condition`/`astCondition` are matched against: `text`,
     `thinking`, `tool`, `toolcall`, `tool:<name>`, or `tool:<name>(<glob>)` such as
     `tool:edit(*.sql)`. A condition naming a tool also matches prose about that tool;
@@ -100,43 +101,32 @@ else.
 
 ## How a lesson reads
 
-Write it for someone who never saw this session, in this order, in three to six lines, every
-sentence doing work:
+It is an instruction, not a report. Write the sentence you would say to the agent standing in the
+situation — what to do, and the reason when the reason is what makes it stick — then stop. Two or
+three lines is usually the whole of it, and a skill that has steps is the list of steps.
 
-1. **The problem** — what goes wrong, in one sentence. Not what the agent did; the trap.
-2. **Where it bit here** — the one concrete moment from this session: the command, the file,
-   the edit, and what it printed or returned. One clause, quoted the way it happened. This is
-   what makes the lesson believable and findable.
-3. **The instruction** — what to do instead, stated so it can be followed without you.
+What a body never carries: labels ("Problem:", "Where it bit:", "Instruction:"), dates, counts, the
+outcome of the session, or the trap restated in the abstract. The reviewer reads that in `rationale`,
+the citations hold the evidence, and a body that repeats any of it charges every future session for
+the reviewer's copy. The cost of getting it wrong is not a part of the lesson either — it belongs in
+`rationale`, where it is read once.
 
-Three parts, in that order. The cost of getting it wrong is not a fourth: it belongs in
-`rationale`, where the reviewer reads it and the next session's context never pays for it.
+Bad: "Problem: running the suite from the repo root finds no tests and reports an empty pass, so a
+green run proves nothing. It bit on 2026-09-22, when the agent read that empty pass as success.
+Instruction: change into packages/core before running the tests." — three labels around two sentences
+of instruction, with a date and a re-telling no future session needs.
 
-A rule, an agent prompt and `APPEND_SYSTEM.md` are the exception. They are not opened on demand —
-they are injected, into a stream the moment a condition matches or into every request that agent
-makes — so their body is the instruction alone: a few lines, and rarely more than two. The problem,
-the instance and the figures go in `rationale`, with everything else only the reviewer reads. A rule
-that explains itself to the agent it interrupts charges that explanation at every match, which is
-the cost this project is trying not to accumulate. If the instruction needs a paragraph to be
-followed, it is two rules, or a skill.
+Good: "Run the suite from packages/core: at the repo root it reports a pass with no tests found, so a
+green run proves nothing there."
 
-Bad: "A test command issued from the repo root finds no tests and reports an empty pass,
-which looks like success but proves nothing. Change into packages/core before running the
-tests." — a rule with nothing to recognise it by, and the cost padded on the end.
+Same lesson, a third of the length, and the second one is what an agent can act on in the second it
+reads it. The first would have been a fine `rationale`.
 
-Good: "Running the suite from the repo root finds nothing and reports a pass, so a green run
-proves nothing (`bun test` at the root printed `0 pass — no tests found`). Run it from
-packages/core — a root-level run will report success on a broken repo."
-
-The bad one states a rule nothing is anchored to. The good one names the moment, the
-command, and what it printed, so the next agent recognises the trap when it is standing in
-it. Keep it short: the whole lesson — problem, instance, instruction, why — fits in a few
-lines, and everything that is not one of those four parts is noise.
-
-That good one is a skill's body. The same lesson as a rule is its last sentence alone —
-"Run it from packages/core — a root-level run will report success on a broken repo." — because the
-agent that triggers it has already run the command, and the printed output belongs in `rationale`.
-Write the instruction you would want shouted at you mid-command, not the case for it.
+A rule, an agent prompt and `APPEND_SYSTEM.md` take less still. They are not opened on demand: they
+are injected, into a stream the moment a condition matches or into every request that agent makes, so
+their body is the instruction and at most the clause that makes it stick — the trigger already knows
+the situation. "Run the suite from packages/core." Everything else goes in `rationale`, with the rest
+of what only the reviewer reads.
 
 The `rationale` field is not part of the lesson a future agent reads. It is what the reviewer
 reads: why the fix must be applied — the cost of skipping it — and what in this session tells

@@ -85,15 +85,15 @@ describe("the propose_lessons contract", () => {
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("call `tasks_completed`");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("trace:record");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(".omp/distill/lessons/");
-    // A lesson that reads well is the point: the body's four parts, in order, and the cap.
-    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the problem (what goes wrong)");
+    // A lesson that reads well is the point: the body is an instruction, not a report.
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("A body is an instruction, not a report");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain(`at most ${MAX_LESSON_BODY_CHARS} characters`);
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain('labels ("Problem:", "Where it bit:", "Instruction:")');
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("why the fix must be applied");
     // Grounding: the citations have to be the moment the lesson came from.
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("citations do not show it is not grounded");
-    // And the one exception: what is injected takes the instruction alone — its length is the
-    // operator's call, in the project's own prompt (ADR-0018).
-    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("the body is the instruction alone");
+    // And the one exception: what is injected takes the instruction, shorter still.
+    expect(PROPOSE_LESSONS_DESCRIPTION).toContain("Those take the instruction");
     expect(PROPOSE_LESSONS_DESCRIPTION).toContain("stated in its own evaluator prompt");
   });
 

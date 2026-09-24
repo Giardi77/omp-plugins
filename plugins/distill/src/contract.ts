@@ -79,8 +79,8 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `verdict: one line stating what this session taught, or why nothing in it is worth keeping.`,
   `lessons: the lessons worth keeping, or [] when the session teaches nothing reusable. One lesson is one durable instruction for future agent sessions in this project.`,
   ``,
-  `A body carries three things, in this order: the problem (what goes wrong), the one moment in this session where it bit (the command, file or edit, and what it returned), and the instruction. Three to six lines, at most ${MAX_LESSON_BODY_CHARS} characters. The instance is the point: a lesson that states a rule nothing is anchored to is one nobody recognises when they are standing in it.`,
-  `Three kinds are the exception, because their body is injected rather than read: a \`rule\` fires into a future stream when its trigger matches, and \`append_system\` and \`agent_prompt\` ride the project's or that agent's every request. For those the body is the instruction alone, and the problem, the moment it bit and the cost go in \`rationale\`, where the reviewer reads them and no future context pays for them. How short that is — and it is short — is the project's call, stated in its own evaluator prompt.`,
+  `A body is an instruction, not a report: what a future agent should do, in the words you would say to someone standing in the situation, at most ${MAX_LESSON_BODY_CHARS} characters. Two or three lines is usually the whole of it, and a skill with steps is the list of steps. It never carries labels ("Problem:", "Where it bit:", "Instruction:"), a date, a count, or an account of what this session did — the reviewer reads that in \`rationale\`, the citations hold the evidence, and every line of a body is context a later session pays for.`,
+  `Three kinds take less still, because their body is injected rather than read: a \`rule\` fires into a future stream when its trigger matches, and \`append_system\` and \`agent_prompt\` ride the project's or that agent's every request. Those take the instruction, and at most the clause that makes it stick — the trigger already knows the situation. How short that is — and it is short — is the project's call, stated in its own evaluator prompt.`,
   `rationale: why the fix must be applied — the cost of skipping it next time — and what makes this true. The reviewer reads it before deciding, so it is yours to argue in; it is never a note about which kind or target you chose.`,
   ``,
   `removes: lines to take *out* of the target file — a rule that no longer holds, the same instruction twice, a stale workaround, a paragraph that costs more than it returns. Quote them as you read them; the plugin finds those lines ignoring indentation and removes exactly them, putting the body where they were (leave the body empty to remove and add nothing). A surface that has grown bloated is a lesson: trim it rather than adding to it.`,
@@ -109,7 +109,9 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `    "always"            — alwaysApply: true; injected into every request (the loudest rule)`,
   `    "condition:<regex>" — condition: [<regex>]; a match on the stream, e.g. "condition:\\bterraform apply\\b"`,
   `    "ast:<pattern>"     — astCondition: [<pattern>]; a match on an edit or write payload`,
-  `    "globs:<glob>"      — globs: [<glob>]; the paths the rule is about — a filter, not a trigger`,
+  `    "globs:<glob>"      — globs: [<glob>]; the paths the rule is about. It never fires the rule:`,
+  `                          with a trigger it narrows when that trigger applies, and on its own it`,
+  `                          is a listed rule with its globs shown beside its description`,
   `    "agent:<name>"      — agents: [<name>]; only that agent runs it`,
   `    "scope:<token>"     — scope: [<token>]; which streams the condition is matched against:`,
   `                          "text", "thinking", "tool", "toolcall", "tool:bash", "tool:edit(*.rs)"`,
@@ -208,7 +210,7 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
           body: {
             type: "string",
             description:
-              `The lesson itself, at most ${MAX_LESSON_BODY_CHARS} characters. Read kinds (skill, skill_reference): the problem, the one moment in this session where it bit, then the instruction, in that order. Injected kinds (rule, agent_prompt, append_system): the instruction alone, with the problem, the instance and the cost in rationale. Never a paste of the trace.`,
+              `The lesson itself, at most ${MAX_LESSON_BODY_CHARS} characters: the instruction, in the words you would say to an agent standing in the situation — with the reason when a few words of it are what makes it stick. No labels, no dates, no counts, no account of the session: those belong in rationale, which only the reviewer reads.`,
           },
           target: {
             type: "string",
@@ -451,7 +453,7 @@ export function parseAnswer(raw: unknown): AnswerParse {
     strings.body = typeof lesson.body === "string" ? lesson.body.trim() : "";
     if ((strings.body ?? "").length > MAX_LESSON_BODY_CHARS) {
       errors.push(
-        `${where}.body is ${(strings.body ?? "").length} characters; keep it under ${MAX_LESSON_BODY_CHARS} — problem, instance, instruction, cost, and nothing else`,
+        `${where}.body is ${(strings.body ?? "").length} characters; keep it under ${MAX_LESSON_BODY_CHARS} — the instruction, the reason when a few words of it are what makes it stick, and nothing else`,
       );
     }
     for (const problem of targetProblems(kind, strings.target ?? "")) errors.push(`${where}.${problem}`);
