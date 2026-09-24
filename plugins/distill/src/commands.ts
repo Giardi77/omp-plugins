@@ -15,6 +15,19 @@ import {
 import { ANSWER_CONTRACT_VERSION } from "./contract";
 import { runEvaluation, type EvaluatorModel } from "./evaluator";
 import {
+  buildScanJob,
+  cancelRequestPath,
+  cancelScanJob,
+  clearCancelRequest,
+  describeScanJob,
+  readScanDaemon,
+  readScanJob,
+  scanJobPath,
+  startScanJob,
+  writeScanJob,
+  type ScanJob,
+} from "./job";
+import {
   appendLedger,
   decideLesson,
   withStoreLock,
@@ -108,7 +121,8 @@ const DISTILL_USAGE = [
   "/distill setup [--model <spec>] [--thinking <level>]",
   "/distill enable | disable",
   "/distill status",
-  "/distill scan [--limit <n>] [--session <id|file>] [--dry-run]",
+  "/distill scan [--limit <n>] [--session <id|file>] [--dry-run]   (runs in the background)",
+  "/distill cancel",
   "/distill review",
   "/distill purge [--yes]",
 ].join("\n");
@@ -145,6 +159,14 @@ export async function runDistillCommand(
       return;
     case "scan":
       await runScan(pi, ctx, paths, invocation.flags);
+      return;
+    case "cancel":
+      await runCancel(ctx, paths);
+      return;
+    case "_job":
+      // The daemon's own entry point, never typed by hand: /distill scan starts it through the
+      // host's broker with the journal already written.
+      await runScanJob(pi, ctx, paths);
       return;
     case "review":
       await runReviewCommand(ctx, paths);
@@ -270,11 +292,12 @@ export async function collectStatus(
   };
 }
 
-export function renderStatus(summary: StatusSummary): string {
+export function renderStatus(summary: StatusSummary, scan?: string): string {
   const lines = [
     `distill — ${summary.enabled ? "enabled" : "disabled"} in ${summary.projectRoot}`,
     `evaluator prompt: ${path.relative(summary.projectRoot, summary.evaluatorPath)}`,
     `sessions eligible for a scan: ${summary.eligibleSessions}${summary.skippedSessions > 0 ? ` (${summary.skippedSessions} skipped)` : ""}`,
+    ...(scan === undefined ? [] : [scan]),
     `lessons: ${summary.proposed} proposed, ${summary.approved} approved, ${summary.denied} denied`,
   ];
   if (summary.lastEvaluation) {
@@ -302,7 +325,8 @@ async function runStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths: 
     agentDir: pi.pi.getAgentDir(),
     sessionDir: ctx.sessionManager.getSessionDir(),
   });
-  notify(ctx, renderStatus(await collectStatus(paths, config, discovery)), "info");
+  const scan = describeScanJob(await readScanJob(paths), await readScanDaemon(paths));
+  notify(ctx, renderStatus(await collectStatus(paths, config, discovery), scan), "info");
 }
 
 async function runScan(
@@ -342,40 +366,172 @@ async function runScan(
   const selection = await selectSessions(ctx, eligible, flags, config);
   if (!selection) return;
 
+  // Resolve the model here too: a bad `model:` key should fail before a daemon is started, not
+  // inside a process whose output nobody is reading yet.
   const model = resolveModel(ctx, config);
   if (model instanceof Error) {
     notify(ctx, model.message, "error");
     return;
   }
 
-  const lock = await acquireScanLock(paths);
-  if (!lock) {
-    notify(ctx, "A scan is already running in this project.", "error");
+  // A dry run sends nothing, records nothing and needs no daemon: it prints what a scan would send.
+  if (flags.dryRun) {
+    for (const session of selection) {
+      await scanOne(pi, ctx, paths, config, evaluator, session, flags, model, new AbortController().signal, retired);
+    }
     return;
   }
 
-  // A cancel request is only meaningful while a scan holds the lock, so a stale one from a
-  // purge that gave up is cleared here rather than cancelling this scan.
-  await fs.rm(cancelRequestPath(paths), { force: true });
-  const cancellation = new AbortController();
-  const watcher = setInterval(() => {
-    void fileExists(cancelRequestPath(paths)).then(pending => {
-      if (pending) cancellation.abort();
-    });
-  }, 500);
+  // The lock is held for a scan's whole life by the runner; probing it here only refuses a second
+  // scan early, with a message the operator can act on.
+  const probe = await acquireScanLock(paths, { retries: 1 });
+  if (!probe) {
+    notify(ctx, "A scan is already running in this project — /distill status shows it.", "error");
+    return;
+  }
+  probe.release();
+  // A fresh scan never inherits a cancel request aimed at the last one.
+  await clearCancelRequest(paths);
 
+  const job = buildScanJob(selection.map(session => ({ sessionId: session.sessionId, title: session.title })));
+  const started = await startScanJob(paths, job);
+  if (!started.ok) {
+    notify(
+      ctx,
+      `No background scan here (${started.reason}), so it runs in this session — closing OMP would end it.`,
+      "warning",
+    );
+    await runScanJob(pi, ctx, paths);
+    return;
+  }
+  notify(
+    ctx,
+    `Scan started in the background over ${job.sessions.length} session(s)${started.pid === undefined ? "" : ` (pid ${started.pid})`} — /distill status shows it, /distill cancel stops it. It keeps running if you close OMP.`,
+    "info",
+  );
+}
+
+/**
+ * The runner: everything it needs is on disk, so the process that started it is irrelevant — which
+ * is the point. In the daemon's own process this is the whole scan; when no daemon can be started
+ * it is the same scan inside the operator's session, and `/distill status` says which.
+ */
+async function runScanJob(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
+  const job = await readScanJob(paths);
+  if (job === undefined) {
+    notify(ctx, `No scan journal at ${path.relative(paths.projectRoot, scanJobPath(paths))}; nothing to run.`, "error");
+    return;
+  }
+
+  const config = await readConfig(paths);
+  if (!config?.enabled) {
+    await finishScanJob(paths, job, "failed", "the project is not active, or distill is disabled");
+    notify(ctx, "The project is not active, or distill is disabled; the scan cannot run.", "error");
+    return;
+  }
+  const evaluator = await readEvaluatorPrompt(paths);
+  if (!evaluator) {
+    await finishScanJob(paths, job, "failed", `no evaluator prompt at ${paths.evaluatorPath}`);
+    notify(ctx, `No evaluator prompt at ${paths.evaluatorPath}; run /distill setup.`, "error");
+    return;
+  }
+  const model = resolveModel(ctx, config);
+  if (model instanceof Error) {
+    await finishScanJob(paths, job, "failed", model.message);
+    notify(ctx, model.message, "error");
+    return;
+  }
+
+  const lock = await acquireScanLock(paths);
+  if (!lock) {
+    notify(ctx, "Another scan holds this project's lock; this runner exits without touching it.", "info");
+    return;
+  }
+
+  const headless: DistillFlags = { dryRun: false, yes: false };
   try {
-    for (const session of selection) {
-      if (cancellation.signal.aborted) break;
-      await scanOne(pi, ctx, paths, config, evaluator, session, flags, model, cancellation.signal, retired);
-    }
-    if (cancellation.signal.aborted) {
-      notify(ctx, "Scan cancelled by a purge; run /distill scan again after it finishes.", "warning");
+    job.status = "running";
+    job.pid = process.pid;
+    await writeScanJob(paths, job);
+
+    const cancellation = new AbortController();
+    const watcher = setInterval(() => {
+      void fileExists(cancelRequestPath(paths)).then(pending => {
+        if (pending) cancellation.abort();
+      });
+    }, 500);
+
+    try {
+      const discovery = await listProjectSessions({
+        cwd: paths.projectRoot,
+        agentDir: pi.pi.getAgentDir(),
+        sessionDir: ctx.sessionManager.getSessionDir(),
+      });
+      const retired = await retiredTraceSessionIds(paths);
+
+      for (const entry of job.sessions) {
+        if (cancellation.signal.aborted) break;
+        const candidate = discovery.sessions.find(session => session.sessionId === entry.sessionId);
+        if (candidate === undefined) {
+          entry.status = "failed";
+          entry.reason = "the session is no longer in this project's store";
+          job.errors.push(`${entry.sessionId}: ${entry.reason}`);
+          await writeScanJob(paths, job);
+          continue;
+        }
+        entry.status = "running";
+        await writeScanJob(paths, job);
+
+        const outcome = await scanOne(pi, ctx, paths, config, evaluator, candidate, headless, model, cancellation.signal, retired);
+        if (cancellation.signal.aborted) {
+          // A cancelled session is not a covered one. Its ledger row already says the run failed, so
+          // its traces stay eligible — the journal has to say the same, or the count reads as work
+          // that was done.
+          entry.status = "pending";
+          entry.reason = "cancelled before it finished";
+          delete entry.lessons;
+          delete entry.verdict;
+          await writeScanJob(paths, job);
+          break;
+        }
+        entry.status = outcome.failed === true ? "failed" : "done";
+        entry.lessons = outcome.lessons;
+        if (outcome.verdict !== undefined) entry.verdict = outcome.verdict;
+        if (outcome.reason !== undefined) entry.reason = outcome.reason;
+        job.lessons += outcome.lessons;
+        if (outcome.failed === true) job.errors.push(`${entry.sessionId}: ${outcome.reason ?? "failed"}`);
+        await writeScanJob(paths, job);
+      }
+      job.status = cancellation.signal.aborted ? "cancelled" : "finished";
+    } finally {
+      clearInterval(watcher);
+      job.endedAt = new Date().toISOString();
+      await writeScanJob(paths, job);
     }
   } finally {
-    clearInterval(watcher);
     lock.release();
   }
+}
+
+/** A runner that cannot start at all still has to leave the journal honest. */
+async function finishScanJob(
+  paths: DistillPaths,
+  job: ScanJob,
+  status: "failed" | "cancelled" | "finished",
+  reason: string,
+): Promise<void> {
+  job.status = status;
+  job.errors.push(reason);
+  job.endedAt = new Date().toISOString();
+  await writeScanJob(paths, job);
+}
+
+/** What one session's scan came to; the runner journals it and the daemon's log carries the words. */
+interface ScanOutcome {
+  lessons: number;
+  verdict?: string;
+  reason?: string;
+  failed?: boolean;
 }
 
 async function scanOne(
@@ -389,7 +545,7 @@ async function scanOne(
   model: ResolvedModel,
   signal: AbortSignal,
   retired: ReadonlySet<string>,
-): Promise<void> {
+): Promise<ScanOutcome> {
   const loaded = await loadTraceBundle({ sessionFile: session.path, projectRoot: paths.projectRoot });
   if (!loaded.ok) {
     await appendLedger(
@@ -404,7 +560,7 @@ async function scanOne(
       }),
     );
     notify(ctx, `${session.sessionId}: could not read the session — ${loaded.reason}`, "error");
-    return;
+    return { lessons: 0, reason: loaded.reason, failed: true };
   }
 
   // Traces an earlier evaluation already covered are not re-sent: a retry pays only for what
@@ -413,7 +569,7 @@ async function scanOne(
   const pending: TraceBundle = { ...loaded.bundle, traces: loaded.bundle.traces.filter(trace => !retired.has(trace.sessionId)) };
   if (pending.traces.length === 0) {
     notify(ctx, `${session.sessionId}: every trace is already evaluated.`, "info");
-    return;
+    return { lessons: 0, reason: "every trace is already evaluated" };
   }
 
   const renderOptions = { includeThinking: config.include_thinking };
@@ -422,7 +578,7 @@ async function scanOne(
   if (flags.dryRun) {
     // The dry run prints exactly what a scan would send: the inventory is the whole payload.
     showPayload(ctx, payload);
-    return;
+    return { lessons: 0, reason: "dry run" };
   }
 
   notify(
@@ -478,17 +634,18 @@ async function scanOne(
       `${session.sessionId}: the evaluation failed — ${run.reason} (${path.relative(paths.projectRoot, dump)})${warnings}. Its traces stay eligible for a retry.`,
       "error",
     );
-    return;
+    return { lessons: 0, reason: run.reason ?? "failed", failed: true };
   }
   if (saved.created.length === 0) {
     notify(ctx, `${session.sessionId}: nothing worth keeping — ${run.verdict || "no verdict given"}${warnings}`, "info");
-    return;
+    return { lessons: 0, verdict: run.verdict };
   }
   notify(
     ctx,
     `${session.sessionId}: ${saved.created.length} lesson(s) proposed${saved.duplicates.length > 0 ? `, ${saved.duplicates.length} duplicate(s) ignored` : ""}${warnings} — ${run.verdict}\nRun /distill review to decide.`,
     "info",
   );
+  return { lessons: saved.created.length, verdict: run.verdict };
 }
 
 async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
@@ -570,6 +727,26 @@ async function reviewEntry(paths: DistillPaths, lesson: StoredLesson): Promise<R
   } catch (error) {
     return { lesson, preview: "", context, blocked: messageOf(error) };
   }
+}
+
+/** Stops a running scan: the runner first, the broker's hammer only if it will not go. */
+async function runCancel(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
+  const outcome = await cancelScanJob(paths);
+  if (outcome === "idle") {
+    notify(ctx, "No scan is running in this project.", "info");
+    return;
+  }
+  if (outcome === "unreachable") {
+    notify(ctx, "Could not reach the scan's supervisor, so nothing was asked of it — `omp ps` shows it if it is still there.", "warning");
+    return;
+  }
+  notify(
+    ctx,
+    outcome === "cancelled"
+      ? "The scan stopped; /distill status has what it managed to record."
+      : "The scan would not stop in the grace period, so it was killed — the evaluation in flight is lost, and everything it already recorded stands.",
+    "info",
+  );
 }
 
 async function runPurge(ctx: ExtensionCommandContext, paths: DistillPaths, flags: DistillFlags): Promise<void> {
@@ -789,11 +966,6 @@ async function writeFailureDump(
   };
   await Bun.write(dumpPath, `${JSON.stringify(dump, null, 2)}\n`);
   return dumpPath;
-}
-
-/** `/distill purge` writes this while it waits for a running scan to stop (D19). */
-function cancelRequestPath(paths: DistillPaths): string {
-  return path.join(paths.tmpDir, "scan.cancel");
 }
 
 function showPayload(ctx: ExtensionCommandContext, payload: string): void {

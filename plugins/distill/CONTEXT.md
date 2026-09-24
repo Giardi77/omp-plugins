@@ -84,7 +84,8 @@ _Avoid_: prompt, projection
 
 **Scan**:
 The explicit, operator-triggered act that selects sessions and runs the evaluator over them, one
-session at a time.
+session at a time. It runs in the background — the session that started it can close — and `/distill
+status` is where its state is read.
 _Avoid_: batch, crawl, job
 
 **Evaluation**:

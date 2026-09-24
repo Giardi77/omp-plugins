@@ -33,6 +33,7 @@ and a `tmp/` ignore rule. Then:
 ```text
 /distill status    # is the loop on, how many sessions are eligible, what awaits review
 /distill scan      # evaluate sessions — the terminal offers the project's sessions to choose from
+/distill cancel    # stop a running scan
 /distill review    # decide the proposed lessons: ↑/↓ move, a accept, d deny, q quit
 /distill disable   # pause without uninstalling
 /distill purge     # forget this project's records (never omp's session files)
@@ -41,6 +42,14 @@ and a `tmp/` ignore rule. Then:
 `/distill scan --limit 3` bounds a scan's cost, `/distill scan --dry-run` prints the exact payload
 and calls no model, and `/distill scan --session <id>` evaluates one session without choosing.
 Scans are serialized: two cannot run at once in one project.
+
+A scan runs in the **background** — the host's own daemon broker starts it detached, so closing OMP
+does not end it, and `omp ps` lists it beside everything else the host supervises. `/distill status`
+is where its state is read: which session it is on, how many lessons it has proposed, or what it came
+to if it is over. A scan whose process died reads as *interrupted*, with the sessions it never
+reached still eligible; `/distill cancel` stops a running one, gracefully first and by force only if
+the runner will not go. When no daemon can be started (no `omp` on `PATH`, or a host that does not
+serve the broker) the scan runs in the session that asked for it, and `status` says so.
 
 The evaluator is handed an **inventory** of the session's traces — each one's id, record range, size
 and transcript file — and reads the records itself with `get_trace`: a section at a time, by range, by

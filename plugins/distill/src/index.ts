@@ -9,7 +9,8 @@ import { messageOf } from "./util";
  * or from any other event — a scan is only ever the operator's explicit act (D7).
  */
 
-const SUBCOMMANDS = ["setup", "enable", "disable", "status", "scan", "review", "purge"];
+// `_job` is deliberately absent: it is the daemon's entry point, not something to type.
+const SUBCOMMANDS = ["setup", "enable", "disable", "status", "scan", "cancel", "review", "purge"];
 
 const FLAGS_BY_SUBCOMMAND: Record<string, string[]> = {
   setup: ["--model", "--thinking", "--yes"],
@@ -22,7 +23,7 @@ export default function distillExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("distill", {
     description:
-      "Session learning for this project: setup, enable/disable, status, scan, review, purge",
+      "Session learning for this project: setup, enable/disable, status, scan, cancel, review, purge",
     getArgumentCompletions(argumentPrefix: string) {
       const trimmed = argumentPrefix.trimStart();
       if (trimmed.includes(" ")) {

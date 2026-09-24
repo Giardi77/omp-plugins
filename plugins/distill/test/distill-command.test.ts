@@ -7,12 +7,48 @@ import { distillPaths, setupProject } from "../src/config";
 import { EVALUATOR_TOOL_NAMES, type EvaluatorTool } from "../src/evaluator";
 import distillExtension from "../src/index";
 import { evaluationRecord, listLessons, readLedger } from "../src/lessons";
+import {
+  __setScanBrokerForTests,
+  readScanJob,
+  SCAN_DAEMON_NAME,
+  type ScanBroker,
+  type ScanDaemonSpec,
+} from "../src/job";
 import { resolveStore } from "../src/store";
 import { isRecord } from "../src/util";
 import { assistantMessage, makeTempDir, textPart, userMessage, writeSessionFixture } from "./fixtures";
 
 const SESSION_ID = "aaaa1111-2222-7000-8000-000000000060";
 const RECORD_ID = "50000001";
+
+/**
+ * A stand-in for the host's daemon broker. The real one would spawn an `omp -p "/distill _job"`
+ * process in `~/.omp/run`, which a test must never do — it would leave a daemon behind on the
+ * machine running the suite.
+ */
+function fakeBroker(): { broker: ScanBroker; specs: ScanDaemonSpec[]; end: () => void } {
+  const specs: ScanDaemonSpec[] = [];
+  let alive = false;
+  return {
+    specs,
+    end: () => {
+      alive = false;
+    },
+    broker: {
+      start: async spec => {
+        specs.push(spec);
+        alive = true;
+        return { pid: 4242 };
+      },
+      list: async () => [{ name: SCAN_DAEMON_NAME, state: alive ? "running" : "exited", pid: 4242 }],
+      waitForExit: async () => true,
+      stop: async () => {
+        alive = false;
+        return true;
+      },
+    },
+  };
+}
 
 type RegisteredCommand = {
   description?: string;
@@ -29,6 +65,8 @@ interface Harness {
   labels: string[];
   /** Every evaluator session the scan asked for, in order. */
   created: CreateAgentSessionOptions[];
+  /** The broker the scan command would otherwise reach. */
+  scan: { specs: ScanDaemonSpec[]; end: () => void };
 }
 
 function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harness {
@@ -36,6 +74,9 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
   const sessionStart: Handler[] = [];
   const labels: string[] = [];
   const created: CreateAgentSessionOptions[] = [];
+
+  const scan = fakeBroker();
+  __setScanBrokerForTests(scan.broker);
 
   const pi = {
     setLabel: (label: string) => labels.push(label),
@@ -74,7 +115,7 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
     },
   };
 
-  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created };
+  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created, scan: { specs: scan.specs, end: scan.end } };
 }
 
 /**
@@ -182,6 +223,7 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 
 afterEach(() => {
   lastPayload = "";
+  __setScanBrokerForTests(undefined);
 });
 
 async function projectWithSession(): Promise<{ project: string; sessionDir: string; agentDir: string }> {
@@ -215,7 +257,9 @@ describe("the distill command", () => {
 
     const command = commands.distill!;
     const names = (command.getArgumentCompletions?.("") ?? []) as Array<{ label: string }>;
-    expect(names.map(entry => entry.label)).toEqual(["setup", "enable", "disable", "status", "scan", "review", "purge"]);
+    expect(names.map(entry => entry.label)).toEqual(["setup", "enable", "disable", "status", "scan", "cancel", "review", "purge"]);
+    // `_job` is the daemon's entry point and must never be offered as a thing to type.
+    expect(names.map(entry => entry.label)).not.toContain("_job");
     const flags = (command.getArgumentCompletions?.("scan --") ?? []) as Array<{ label: string }>;
     expect(flags.map(entry => entry.label)).toEqual(["--limit", "--session", "--dry-run"]);
     expect(command.getArgumentCompletions?.("nonsense")).toBeNull();
@@ -341,12 +385,30 @@ describe("the distill command", () => {
     const paths = distillPaths(project);
     await setupProject(project);
 
-    const { api, commands } = harness({ evaluate: true, agentDir });
+    const { api, commands, scan } = harness({ evaluate: true, agentDir });
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
-    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+    // `scan` resolves and hands off; `_job` is what the daemon runs. The spec is the contract with
+    // the host's broker, so it is asserted rather than assumed.
+    const output = await captureStdout(async () => {
+      await commands.distill!.handler("scan --limit 1", ctx);
+      await commands.distill!.handler("_job", ctx);
+    });
 
+    expect(scan.specs).toHaveLength(1);
+    expect(scan.specs[0]).toMatchObject({
+      name: SCAN_DAEMON_NAME,
+      args: ["-p", "/distill _job"],
+      cwd: project,
+      detached: true,
+      persist: true,
+      restart: "no",
+      pty: false,
+    });
+    expect(scan.specs[0]?.application).toContain("omp");
+    expect(output).toContain("Scan started in the background");
+    expect(await readScanJob(paths)).toMatchObject({ status: "finished", lessons: 1, errors: [] });
     expect(output).toContain("1 lesson(s) proposed");
     expect(output).toContain("one lesson from the fixture");
 
@@ -402,7 +464,10 @@ describe("the distill command", () => {
       models: [{ provider: "deepseek", id: "tiny", name: "Tiny", contextWindow: 1 }],
     });
 
-    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+    const output = await captureStdout(async () => {
+      await commands.distill!.handler("scan --limit 1", ctx);
+      await commands.distill!.handler("_job", ctx);
+    });
 
     // One run for the session, whatever its size: the payload is the inventory.
     expect(created).toHaveLength(1);
@@ -463,7 +528,10 @@ describe("the distill command", () => {
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
-    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+    const output = await captureStdout(async () => {
+      await commands.distill!.handler("scan --limit 1", ctx);
+      await commands.distill!.handler("_job", ctx);
+    });
 
     expect(created).toHaveLength(1);
     expect(output).toContain("1 trace(s), 1 already evaluated");
@@ -505,7 +573,10 @@ describe("the distill command", () => {
     distillExtension(api);
 
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
-    const fresh = await captureStdout(() => commands.distill!.handler("scan", ctx));
+    const fresh = await captureStdout(async () => {
+      await commands.distill!.handler("scan", ctx);
+      await commands.distill!.handler("_job", ctx);
+    });
     expect(fresh).toContain("1 lesson(s) proposed");
 
     const again = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));

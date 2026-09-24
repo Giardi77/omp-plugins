@@ -16,6 +16,8 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   capped output, killed on timeout
 - `src/contract.ts` — the `propose_lessons` schema/description, answer validation, citation
   resolution, lesson identity
+- `src/job.ts` — a scan as a background daemon: the journal `/distill status` reads, the runner's
+  entry point, and the host broker calls that start, list and stop it
 - `src/bundle.ts` — one session's parent + subagent traces into one payload
 - `src/evaluator.ts` — the sealed in-process evaluator session, its surface assertion, the run
 - `src/lessons.ts` — lesson JSON + append-only ledger, eligibility, purge
