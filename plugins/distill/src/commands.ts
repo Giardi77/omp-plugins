@@ -162,16 +162,8 @@ async function runSetup(ctx: ExtensionCommandContext, paths: DistillPaths, flags
   let thinking = flags.thinking;
 
   if (ctx.hasUI && ctx.mode === "tui" && !flags.yes) {
-    const specs = ctx.models
-      .list()
-      .map(candidate => specOf(candidate))
-      .filter((spec, index, all) => spec !== "" && all.indexOf(spec) === index)
-      .slice(0, 25);
-    const choice = await ctx.ui.select("Evaluator model — Esc keeps this session's model", [
-      "this session's model",
-      ...specs,
-    ]);
-    if (choice !== undefined && choice !== "this session's model") model = choice;
+    const choice = await pickModel(ctx);
+    if (choice !== undefined) model = choice;
 
     const level = await ctx.ui.select("Evaluator thinking level — Esc leaves it to the model", [
       ...CLI_THINKING_LEVELS,
@@ -622,6 +614,56 @@ interface ResolvedModel {
   model?: EvaluatorModel;
 }
 
+/**
+ * Choosing the evaluator's model, by provider and then by model: the authenticated catalog
+ * runs to hundreds of models across a dozen providers, so a flat list would bury everything
+ * behind whichever provider the registry happens to order first. The session's provider leads,
+ * Esc at either step keeps the session's own model, and only specs that resolve back to the
+ * model they came from are offered — the config stores that string.
+ */
+async function pickModel(ctx: ExtensionCommandContext): Promise<string | undefined> {
+  const byProvider = new Map<string, Array<{ spec: string; name: string }>>();
+  for (const candidate of ctx.models.list()) {
+    const spec = specOf(candidate);
+    if (spec === "") continue;
+    const resolved = ctx.models.resolve(spec);
+    if (!resolved || specOf(resolved) !== spec) continue;
+    const rows = byProvider.get(candidate.provider) ?? [];
+    if (rows.some(row => row.spec === spec)) continue;
+    rows.push({ spec, name: typeof candidate.name === "string" && candidate.name !== candidate.id ? candidate.name : "" });
+    byProvider.set(candidate.provider, rows);
+  }
+
+  const current = ctx.models.current()?.provider;
+  const providers = [...byProvider.keys()].sort((left, right) =>
+    left === current ? -1 : right === current ? 1 : 0,
+  );
+  if (providers.length === 0) return undefined;
+
+  let provider = providers[0] ?? "";
+  if (providers.length > 1) {
+    const labels = new Map(
+      providers.map(name => [
+        `${name} — ${byProvider.get(name)?.length ?? 0} model${(byProvider.get(name)?.length ?? 0) === 1 ? "" : "s"}${name === current ? " (this session)" : ""}`,
+        name,
+      ]),
+    );
+    const chosen = await ctx.ui.select("Evaluator model — provider (Esc keeps this session's model)", [...labels.keys()]);
+    if (chosen === undefined) return undefined;
+    provider = labels.get(chosen) ?? provider;
+  }
+
+  const rows = byProvider.get(provider) ?? [];
+  if (rows.length === 1) return rows[0]?.spec;
+  const models = new Map(rows.map(row => [row.spec, row]));
+  const chosen = await ctx.ui.select(
+    `Evaluator model — ${provider} (Esc keeps this session's model)`,
+    rows.map(row => (row.name === "" ? row.spec : { label: row.spec, description: row.name })),
+  );
+  if (chosen === undefined) return undefined;
+  return models.get(chosen)?.spec;
+}
+
 /** No `model` in the config means the session's own model: the operator's authenticated choice. */
 function resolveModel(ctx: ExtensionCommandContext, config: DistillConfig): ResolvedModel | Error {
   if (config.model) {
@@ -633,10 +675,11 @@ function resolveModel(ctx: ExtensionCommandContext, config: DistillConfig): Reso
   return current ? { spec: specOf(current), model: current } : {};
 }
 
-function specOf(model: { provider?: string; id?: string; name?: string }): string {
+/** The `provider/id` string the config stores and `ctx.models.resolve` reads back. */
+function specOf(model: { provider?: string; id?: string }): string {
   const id = model.id ?? "";
   if (id === "") return "";
-  return model.provider && !id.includes("/") ? `${model.provider}/${id}` : id;
+  return model.provider ? `${model.provider}/${id}` : id;
 }
 
 async function selectSessions(

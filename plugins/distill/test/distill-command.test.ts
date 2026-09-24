@@ -93,12 +93,19 @@ function isProposeTool(value: unknown): value is ProposeLessonsTool {
 // The payload the command handed the evaluator, captured through `prompt`.
 let lastPayload = "";
 
+interface FakeModel {
+  provider: string;
+  id: string;
+  name: string;
+}
+
 interface FakeContextOptions {
   cwd: string;
   mode: "tui" | "rpc" | "print" | "json";
   sessionDir: string;
-  select?: (title: string, options: string[]) => Promise<string | undefined>;
+  select?: (title: string, options: Array<string | { label: string }>) => Promise<string | undefined>;
   confirm?: (title: string, message: string) => Promise<boolean>;
+  models?: FakeModel[];
 }
 
 interface Notified {
@@ -114,11 +121,15 @@ function fakeContext(options: FakeContextOptions): { ctx: ExtensionCommandContex
     hasUI: options.mode === "tui" || options.mode === "rpc",
     sessionManager: { getSessionDir: () => options.sessionDir },
     modelRegistry: { registry: true },
-    models: {
-      current: () => ({ provider: "anthropic", id: "claude-sonnet" }),
-      list: () => [{ provider: "anthropic", id: "claude-sonnet" }],
-      resolve: (spec: string) => ({ provider: spec.split("/")[0] ?? "anthropic", id: spec.split("/")[1] ?? spec }),
-    },
+    models: (() => {
+      const models: FakeModel[] = options.models ?? [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }];
+      const specOf = (model: FakeModel) => `${model.provider}/${model.id}`;
+      return {
+        current: () => models[0],
+        list: () => models,
+        resolve: (spec: string) => models.find(model => specOf(model) === spec),
+      };
+    })(),
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       select: options.select ?? (async () => undefined),
@@ -198,6 +209,80 @@ describe("the distill command", () => {
     const output = await captureStdout(() => commands.distill!.handler("status", ctx));
 
     expect(output).toContain("not active");
+  });
+
+  test("setup picks the evaluator model by provider, so no whole family hides behind a cap", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, commands } = harness({ agentDir });
+    distillExtension(api);
+    const paths = distillPaths(project);
+
+    const cursor = Array.from({ length: 30 }, (_unused, index) => ({
+      provider: "cursor",
+      id: `claude-${index}`,
+      name: `Cursor Claude ${index}`,
+    }));
+    const calls: Array<{ title: string; options: string[] }> = [];
+    const scripting = fakeContext({
+      cwd: project,
+      mode: "tui",
+      sessionDir,
+      models: [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }, ...cursor],
+      select: async (title, options) => {
+        calls.push({ title, options: options.map(option => (typeof option === "string" ? option : option.label)) });
+        if (title.includes("provider")) return "cursor — 30 models";
+        if (title.includes("cursor")) return "cursor/claude-29";
+        return "high";
+      },
+      confirm: async () => true,
+    });
+
+    await captureStdout(() => commands.distill!.handler("setup", scripting.ctx));
+
+    expect(calls[0]?.options).toEqual([
+      "deepseek — 1 model (this session)",
+      "cursor — 30 models",
+    ]);
+    // Every model of the chosen provider is offered; the earlier cap cut at 25 and hid the rest.
+    expect(calls[1]?.title).toContain("cursor");
+    expect(calls[1]?.options).toHaveLength(30);
+    expect(calls[1]?.options.at(-1)).toBe("cursor/claude-29");
+
+    const raw = YAML.parse(await Bun.file(paths.configPath).text()) as Record<string, unknown>;
+    expect(raw.model).toBe("cursor/claude-29");
+  });
+
+  test("a single-model provider is chosen without a second dialog", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, commands } = harness({ agentDir });
+    distillExtension(api);
+    const paths = distillPaths(project);
+
+    const calls: Array<{ title: string; options: string[] }> = [];
+    const scripting = fakeContext({
+      cwd: project,
+      mode: "tui",
+      sessionDir,
+      models: [
+        { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+        { provider: "cursor", id: "claude-4.6-sonnet", name: "Cursor Claude 4.6" },
+      ],
+      select: async (title, options) => {
+        calls.push({ title, options: options.map(option => (typeof option === "string" ? option : option.label)) });
+        return title.includes("provider") ? "deepseek — 1 model (this session)" : "high";
+      },
+      confirm: async () => true,
+    });
+
+    await captureStdout(() => commands.distill!.handler("setup", scripting.ctx));
+
+    expect(calls[0]?.title).toContain("provider");
+    // One model in the chosen provider: no second dialog, and the model is the config's.
+    expect(calls.filter(call => call.title.includes("Evaluator model — deepseek"))).toEqual([]);
+    expect(calls[1]?.title).toContain("thinking level");
+    expect((YAML.parse(await Bun.file(paths.configPath).text()) as Record<string, unknown>).model).toBe(
+      "deepseek/deepseek-v4-flash",
+    );
   });
 
   test("setup activates the project, and enable/disable toggle it", async () => {
