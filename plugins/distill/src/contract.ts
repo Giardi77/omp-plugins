@@ -21,7 +21,10 @@ import {
  * file an operator edits never goes stale against the loop.
  */
 
-export const ANSWER_CONTRACT_VERSION = 2;
+// 3 since `applies_to` became a clause list: the same field now carries a trigger *and* the way it
+// is delivered, so an answer written under v2 and one written under v3 are not the same shape
+// (ADR-0019).
+export const ANSWER_CONTRACT_VERSION = 3;
 /** A body longer than this is refused: the four parts fit in a few lines, and every extra one is noise. */
 export const MAX_LESSON_BODY_CHARS = 1_200;
 export const PROPOSE_LESSONS_TOOL = "propose_lessons";
@@ -47,8 +50,8 @@ export interface ProposedLesson {
   body: string;
   /** What the lesson writes into; its form depends on `kind` (see the tool description). */
   target: string;
-  /** Rules only: what fires the rule. Absent means the agent pulls it in by description. */
-  applies_to?: string;
+  /** Rules only: what fires the rule and how it lands, as one clause or a list (ADR-0019). */
+  applies_to?: string | string[];
   /**
    * Lines to take out of the target file, quoted as the evaluator read them. A lesson that carries
    * this trims rather than appends: the quoted lines go, and `body` — if it has one — stands where
@@ -101,19 +104,30 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `  whether to open it. Its body must open with one sentence saying what the file covers and the`,
   `  situation that should send an agent here — that sentence is what a search or a grep lands on.`,
   `- \`rule\` — behaviour that can be stated exactly for a situation you can name. \`target\` is the`,
-  `  rule's name and \`applies_to\` says what fires it. Firing is not free: the host interrupts the`,
-  `  stream and re-asks with the rule's body in hand, so the body is context a future session pays`,
-  `  for on every match — and the trigger is the whole cost model:`,
-  `    "always"            — injected into every request (the loudest rule; use it sparingly)`,
-  `    "globs:<glob>"      — injected when the work touches a matching path, e.g. "globs:**/*.sql"`,
-  `    "condition:<regex>" — injected when the stream matches, e.g. "condition:\\bterraform apply\\b"`,
-  `    "ast:<pattern>"     — injected when an edit or write payload matches an ast-grep pattern`,
-  `    "agent:<name>"      — one agent, e.g. "agent:main" or a subagent's name`,
-  `    absent              — never injected: listed by description, and the agent opens it when it`,
-  `                          looks relevant. The cheapest rule there is.`,
-  `  Prefer the narrowest trigger that is exact, and make it match the thing you mean: a condition`,
-  `  naming a tool fires on prose about the tool too, and every false match is context spent on a`,
-  `  rule that did not apply.`,
+  `  rule's name; \`applies_to\` says what fires it and how it lands, as one clause or a list of`,
+  `  them, each one a frontmatter key of the host's own rule file:`,
+  `    "always"            — alwaysApply: true; injected into every request (the loudest rule)`,
+  `    "condition:<regex>" — condition: [<regex>]; a match on the stream, e.g. "condition:\\bterraform apply\\b"`,
+  `    "ast:<pattern>"     — astCondition: [<pattern>]; a match on an edit or write payload`,
+  `    "globs:<glob>"      — globs: [<glob>]; the paths the rule is about — a filter, not a trigger`,
+  `    "agent:<name>"      — agents: [<name>]; only that agent runs it`,
+  `    "scope:<token>"     — scope: [<token>]; which streams the condition is matched against:`,
+  `                          "text", "thinking", "tool", "toolcall", "tool:bash", "tool:edit(*.rs)"`,
+  `    "interrupt:<mode>"  — interruptMode: <mode>; what a match does: "never" folds the text into`,
+  `                          the tool result and asks for nothing again, "prose-only" and "tool-only"`,
+  `                          narrow where it stops, "always" stops and re-asks (the host's default)`,
+  `  One trigger at most: \`condition:\`, \`ast:\` or \`always\`. \`scope:\` and \`interrupt:\` shape a`,
+  `  match, so they need one of the first two. No trigger clause at all is a rule with no trigger: it`,
+  `  is listed by its description and the agent opens it when it looks relevant — the cheapest rule`,
+  `  there is, and the right one when the situation cannot be stated exactly.`,
+  `  Firing is not free: the host stops the stream and re-asks with the rule's body in hand, so the`,
+  `  body is context every later session pays for at each match, and the narrowest trigger keeps that`,
+  `  down. A condition naming a tool also fires on prose about the tool — \`scope:tool:bash\` is how`,
+  `  you say "the command, not the discussion" — and \`interrupt:never\` is how you say "tell me",`,
+  `  when stopping mid-command would lose work.`,
+  `  Two of the host's keys are the operator's, not a proposal's: \`question\`, a yes/no a judge model`,
+  `  answers on every completed output (a model call each time), and \`enabled: false\`, which drops`,
+  `  the rule. If the lesson needs one, argue for it in \`rationale\` and the reviewer can add it.`,
   `- \`agent_prompt\` — the behaviour belongs to a subagent. \`target\` is its name under`,
   `  .omp/agents/; that file must already exist, and the body is appended to it.`,
   `- \`append_system\` — something permanent the main agent must always respect. \`target\` is`,
@@ -202,9 +216,10 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
               "skill: the skill slug. skill_reference: \"<skill-slug>/<reference-name>\". rule: the rule's name. agent_prompt: the agent's name under .omp/agents/. append_system: exactly \"APPEND_SYSTEM.md\".",
           },
           applies_to: {
-            type: "string",
+            type: ["string", "array"],
+            items: { type: "string" },
             description:
-              "Rules only: what fires the rule. \"always\", \"globs:**/*.sql\", \"condition:<regex>\", \"ast:<pattern>\", or \"agent:<name>\". The body is injected every time it fires; omit the trigger and the rule is only listed by description, never injected.",
+              "Rules only: what fires the rule and how it lands — one clause or a list: \"always\", \"condition:<regex>\", \"ast:<pattern>\", \"globs:<glob>\", \"agent:<name>\", \"scope:<token>\", \"interrupt:<mode>\". One trigger at most; scope: and interrupt: shape it. Omit and the rule carries no trigger: listed by description, never injected.",
           },
           removes: {
             type: "string",
@@ -228,35 +243,137 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
   },
 };
 
-export type AppliesTo =
-  | { kind: "always" }
-  | { kind: "globs"; value: string }
-  | { kind: "condition"; value: string }
-  | { kind: "ast"; value: string }
-  | { kind: "agent"; value: string };
+/** What a matched rule does to the stream: the host's `interruptMode` vocabulary (ADR-0019). */
+export type InterruptMode = "never" | "prose-only" | "tool-only" | "always";
+export const INTERRUPT_MODES: readonly InterruptMode[] = ["never", "prose-only", "tool-only", "always"];
 
-/** The rule trigger grammar the tool description documents; `undefined` means "no trigger". */
-export function parseAppliesTo(value: string): AppliesTo | undefined {
-  const trimmed = value.trim();
-  if (trimmed === "") return undefined;
-  if (trimmed === "always") return { kind: "always" };
-  const separator = trimmed.indexOf(":");
-  if (separator === -1) return undefined;
-  const prefix = trimmed.slice(0, separator);
-  const rest = trimmed.slice(separator + 1).trim();
-  if (rest === "") return undefined;
-  switch (prefix) {
-    case "globs":
-      return { kind: "globs", value: rest };
-    case "condition":
-      return { kind: "condition", value: rest };
-    case "ast":
-      return { kind: "ast", value: rest };
-    case "agent":
-      return isValidManagedSkillName(rest) ? { kind: "agent", value: rest } : undefined;
-    default:
-      return undefined;
+/** The stream words the host's scope parser knows, beside the tool-token grammar. */
+const SCOPE_WORDS = new Set(["text", "thinking", "tool", "toolcall"]);
+/** Mirrors `#parseToolScopeToken` in the host's `export/ttsr.ts`: a token the host would drop is refused here instead. */
+const SCOPE_TOKEN = /^(?:tool(?::[a-z0-9_-]+)?|[a-z0-9_-]+)(?:\([^)]+\))?$/;
+
+/**
+ * How a rule is triggered and delivered, in the host's own frontmatter keys. A clause list rather
+ * than one string, because `scope` and `interruptMode` shape a trigger instead of replacing it
+ * (ADR-0019).
+ */
+export interface RuleTrigger {
+  /** `alwaysApply: true` — injected into every request, matched against nothing. */
+  always?: true;
+  /** `condition: [<regex>]` — a TTSR match on the stream. */
+  condition?: string;
+  /** `astCondition: [<pattern>]` — a TTSR match on an edit or write payload. */
+  ast?: string;
+  /** `globs: [<glob>]` — the paths the rule is about: a filter, not a trigger. */
+  globs?: string;
+  /** `agents: [<name>]` — only that agent runs it. */
+  agent?: string;
+  /** `scope: [<token>]` — which streams the condition is matched against. */
+  scope?: string;
+  /** `interruptMode: <mode>` — what a match does to the stream. */
+  interrupt?: InterruptMode;
+}
+
+export interface AppliesToParse {
+  /** The frontmatter this lesson asks for; absent when `applies_to` was omitted or empty. */
+  trigger?: RuleTrigger;
+  /** What is wrong with the clauses, as text for the model to fix in the same run. */
+  problems: string[];
+}
+
+const CLAUSE_GRAMMAR =
+  "always, condition:<regex>, ast:<pattern>, globs:<glob>, agent:<name>, scope:<token> or interrupt:<mode>";
+
+/** `applies_to` as given: one clause, a list of them, or nothing. Blank entries are not clauses. */
+export function readAppliesTo(raw: unknown): string | string[] | undefined {
+  const one = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  if (typeof raw === "string") return one(raw) === "" ? undefined : one(raw);
+  if (!Array.isArray(raw)) return undefined;
+  const clauses = raw.map(one).filter(clause => clause !== "");
+  return clauses.length === 0 ? undefined : clauses;
+}
+
+/**
+ * Parses `applies_to` into the frontmatter a rule is written with. Problems come back as text rather
+ * than as a thrown error: the tool rejects the lesson with the reason and the model fixes it inside
+ * the same run.
+ */
+export function parseAppliesTo(value: string | readonly string[] | undefined): AppliesToParse {
+  const clauses = (Array.isArray(value) ? value : value === undefined ? [] : [value])
+    .map(clause => (typeof clause === "string" ? clause.trim() : ""))
+    .filter(clause => clause !== "");
+  const trigger: RuleTrigger = {};
+  const problems: string[] = [];
+  let fires = 0;
+
+  for (const clause of clauses) {
+    if (clause === "always") {
+      if (trigger.always) problems.push('"always" was given twice');
+      else {
+        trigger.always = true;
+        fires += 1;
+      }
+      continue;
+    }
+
+    const separator = clause.indexOf(":");
+    const prefix = separator === -1 ? clause : clause.slice(0, separator);
+    const rest = separator === -1 ? "" : clause.slice(separator + 1).trim();
+    if (rest === "") {
+      problems.push(`"${clause}" carries no value; a clause is ${CLAUSE_GRAMMAR}`);
+      continue;
+    }
+
+    switch (prefix) {
+      case "condition":
+      case "ast": {
+        const key = prefix === "condition" ? "condition" : "ast";
+        if (trigger[key] !== undefined) problems.push(`"${prefix}:" was given twice`);
+        else {
+          trigger[key] = rest;
+          fires += 1;
+        }
+        break;
+      }
+      case "globs":
+        if (trigger.globs !== undefined) problems.push('"globs:" was given twice');
+        else trigger.globs = rest;
+        break;
+      case "agent":
+        if (trigger.agent !== undefined) problems.push('"agent:" was given twice');
+        else if (!isValidManagedSkillName(rest)) {
+          problems.push(`"agent:${rest}" is not an agent name (lowercase letters, digits and hyphens)`);
+        } else trigger.agent = rest;
+        break;
+      case "scope": {
+        const token = rest.toLowerCase();
+        if (trigger.scope !== undefined) problems.push('"scope:" was given twice');
+        else if (!SCOPE_WORDS.has(token) && !SCOPE_TOKEN.test(token)) {
+          problems.push(
+            `"scope:${rest}" is not a stream; the host takes text, thinking, tool, toolcall, tool:<name> or tool:<name>(<glob>)`,
+          );
+        } else trigger.scope = token;
+        break;
+      }
+      case "interrupt":
+        if (trigger.interrupt !== undefined) problems.push('"interrupt:" was given twice');
+        else if (!INTERRUPT_MODES.includes(rest as InterruptMode)) {
+          problems.push(`"interrupt:${rest}" is not a mode; the host takes ${INTERRUPT_MODES.join(", ")}`);
+        } else trigger.interrupt = rest as InterruptMode;
+        break;
+      default:
+        problems.push(`"${prefix}:" is not a clause; a clause is ${CLAUSE_GRAMMAR}`);
+    }
   }
+
+  if (fires > 1) problems.push("a rule fires one way: keep one of always, condition:<regex> or ast:<pattern>");
+  if ((trigger.scope !== undefined || trigger.interrupt !== undefined) && trigger.condition === undefined && trigger.ast === undefined) {
+    problems.push(
+      "scope: and interrupt: shape how a match is handled, so the rule needs a condition:<regex> or ast:<pattern> to match one",
+    );
+  }
+
+  return clauses.length === 0 ? { problems } : { trigger, problems };
 }
 
 /** Per-kind target shapes, checked before a lesson reaches review so the model can fix it. */
@@ -355,11 +472,9 @@ export function parseAnswer(raw: unknown): AnswerParse {
         );
       }
     }
-    const appliesTo = typeof lesson.applies_to === "string" ? lesson.applies_to.trim() : undefined;
-    if (appliesTo !== undefined && appliesTo !== "" && !parseAppliesTo(appliesTo)) {
-      errors.push(
-        `${where}.applies_to must be "always", "globs:<glob>", "condition:<regex>", "ast:<pattern>" or "agent:<name>"`,
-      );
+    const appliesTo = readAppliesTo(lesson.applies_to);
+    if (appliesTo !== undefined) {
+      for (const problem of parseAppliesTo(appliesTo).problems) errors.push(`${where}.applies_to: ${problem}`);
     }
     const citations = Array.isArray(lesson.citations) ? lesson.citations.filter((c): c is string => typeof c === "string") : [];
     if (citations.length === 0) {

@@ -65,8 +65,11 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   which registers no command and leaves `/distill` falling through to the model (ADR-0011). The
   managed-skill rules and the thinking selectors the host does not export live in `src/skill-rules.ts`
   and `src/thinking.ts`; keep each faithful to the host module named in its header.
-- Keep the mechanical instructions in the tool descriptions, never in the project's
-  `evaluator.md` (D15): the file the operator edits must not go stale against the loop.
+- Mechanics live in the tool descriptions (D15) — the `applies_to` grammar, the refusals, the caps —
+  so a copy of the operator's own file can never change what the plugin accepts. The shipped
+  `evaluator.md` may restate what a surface *takes* (the rule frontmatter keys and what each one does,
+  the body an injected kind gets), because that is what shapes the writing; nothing load-bearing lives
+  only there.
 - The project-root walk-up and the YAML config round-trip are mirrored from `plugins/setup-skills`
   and `plugins/telegram` rather than shared: a marketplace plugin installs standalone, so a
   workspace-internal package would not travel with it. Keep the mirror faithful when either

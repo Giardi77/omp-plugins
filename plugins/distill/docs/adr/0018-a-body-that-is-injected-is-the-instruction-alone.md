@@ -34,12 +34,14 @@ not a line in a description. For the record, in case that field is ever added:
 
 - `scope` (`text` | `thinking` | `tool` | `toolcall` | `tool:<name>(<glob>)`) — which streams the
   condition is matched against. It is the precision half of the trigger, and the half that decides
-  whether a rule about a *command* also fires on prose about the command.
+  whether a rule about a *command* also fires on prose about the command. **Writable since ADR-0019**,
+  which turned `applies_to` into a clause list for exactly this reason.
 - `interruptMode` (`never` | `prose-only` | `tool-only` | `always`, the global default) — whether a
   match interrupts the generation or the text is folded into the tool result instead. `never` is
-  cheaper: nothing is re-asked.
+  cheaper: nothing is re-asked. **Writable since ADR-0019** too.
 - `question` — a natural-language yes/no a judge model answers on every completed in-scope output.
-  The only non-regex trigger the host has, and the only one that bills a model call per output.
+  The only non-regex trigger the host has, and the only one that bills a model call per output. Stays
+  out: that spend is the operator's call.
 - `enabled: false` — discovery omits the rule entirely. That is a disable lever for an operator, not
   something a proposal should set: an approved lesson is meant to be live.
 

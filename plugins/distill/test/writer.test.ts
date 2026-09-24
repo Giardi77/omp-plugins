@@ -179,6 +179,70 @@ describe("rules", () => {
     expect(await Bun.file(filePath).text()).toContain("Never force-push.\n\nSleep at least 250ms between retry attempts.\n");
   });
 
+  test("a clause list writes the keys that shape a match, not just the one that makes it", async () => {
+    const paths = await project();
+
+    const capped = await planWrite(
+      paths,
+      lesson({
+        kind: "rule",
+        target: "rate-cap-in-command",
+        title: "Cap the command, not the brief",
+        applies_to: ["condition:\\bhttpx\\b", "scope:tool:bash", "interrupt:never"],
+      }),
+    );
+    expect(capped.writes[0]?.text.startsWith("---\ndescription: 'Cap the command, not the brief'\ncondition:\n  - '\\bhttpx\\b'\n")).toBe(true);
+    expect(capped.writes[0]?.text).toContain("scope:\n  - 'tool:bash'");
+    expect(capped.writes[0]?.text).toContain("interruptMode: never");
+
+    const both = await planWrite(
+      paths,
+      lesson({
+        kind: "rule",
+        target: "worker-edits",
+        title: "Worker edits stay small",
+        applies_to: ["ast:$A = $B", "agent:worker", "globs:**/*.rs", "interrupt:prose-only"],
+      }),
+    );
+    expect(both.writes[0]?.text).toContain("astCondition:\n  - '$A = $B'");
+    expect(both.writes[0]?.text).toContain("agents:\n  - 'worker'");
+    expect(both.writes[0]?.text).toContain("globs:\n  - '**/*.rs'");
+    expect(both.writes[0]?.text).toContain("interruptMode: prose-only");
+  });
+
+  test("a patch agrees with the clauses on disk, and refuses one the file does not carry", async () => {
+    const paths = await project();
+    await writeFile(
+      path.join(paths.projectRoot, ".omp", "rules", "rate-cap-in-command.md"),
+      "---\ndescription: Cap the command\ncondition:\n  - '\\bhttpx\\b'\nscope:\n  - 'tool:bash'\ninterruptMode: never\n---\n\nCap it.\n",
+    );
+
+    // Every clause the lesson asks for is already there: append the body to the rule that carries them.
+    const agreeing = await planWrite(
+      paths,
+      lesson({ kind: "rule", target: "rate-cap-in-command", applies_to: ["condition:\\bhttpx\\b", "scope:tool:bash"] }),
+    );
+    expect(agreeing.writes[0]?.mode).toBe("append");
+    expect(agreeing.writes[0]?.text).not.toContain("interruptMode");
+
+    // A clause the file does not carry is a different rule: the frontmatter is the operator's. The
+    // modifier counts, not just the condition — a glob the file never promised is a different rule.
+    await expect(
+      planWrite(paths, lesson({ kind: "rule", target: "rate-cap-in-command", applies_to: ["condition:\\bhttpx\\b", "interrupt:always"] })),
+    ).rejects.toThrow("fired by different conditions");
+    await expect(
+      planWrite(paths, lesson({ kind: "rule", target: "rate-cap-in-command", applies_to: ["condition:\\bhttpx\\b", "globs:**/*.sh"] })),
+    ).rejects.toThrow("fired by different conditions");
+  });
+
+  test("a stored lesson whose clauses cannot be used is refused, not written half a trigger", async () => {
+    const paths = await project();
+    // Proposal time rejects these, so this is a lesson file edited by hand.
+    await expect(
+      planWrite(paths, lesson({ kind: "rule", target: "hand-edited", applies_to: ["condition:a", "condition:b"] })),
+    ).rejects.toThrow("applies_to is not usable");
+  });
+
   test("a rule name outside the allowlist is refused, and an empty title never mints a description", async () => {
     const paths = await project();
     await expect(planWrite(paths, lesson({ kind: "rule", target: "Bad Name" }))).rejects.toThrow("Invalid skill name");

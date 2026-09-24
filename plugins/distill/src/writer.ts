@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import type { DistillPaths } from "./config";
-import { APPEND_SYSTEM_TARGET, type AppliesTo, parseAppliesTo } from "./contract";
+import { APPEND_SYSTEM_TARGET, parseAppliesTo, type RuleTrigger } from "./contract";
 import { type StoredLesson, withStoreLock } from "./lessons";
 import {
   isValidManagedSkillName,
@@ -269,7 +269,13 @@ async function planRule(paths: DistillPaths, lesson: WritableLesson, now: Date):
   const name = sanitizeSkillName(lesson.target);
   const filePath = path.join(ruleRoot(paths), `${name}.md`);
   const existing = await readText(filePath);
-  const trigger = lesson.applies_to === undefined ? undefined : parseAppliesTo(lesson.applies_to);
+  const parsed = parseAppliesTo(lesson.applies_to);
+  if (parsed.problems.length > 0) {
+    // Proposal time refuses these, so reaching it means the lesson file was edited by hand: fail
+    // loudly rather than write a rule whose frontmatter says something nobody asked for.
+    throw new Error(`The stored lesson's applies_to is not usable: ${parsed.problems.join("; ")}`);
+  }
+  const trigger = parsed.trigger;
 
   if (existing !== undefined) {
     if (trigger !== undefined && !(await ruleTriggerMatches(existing, trigger))) {
@@ -439,48 +445,35 @@ async function renderReferencePointer(skillPath: string, name: string, title: st
   return referencesIsLast ? `${line}\n` : `## References\n\n${line}\n`;
 }
 
-/** Does the rule's own frontmatter already express this trigger? */
-async function ruleTriggerMatches(content: string, trigger: AppliesTo): Promise<boolean> {
+/** Does the rule's own frontmatter already express every clause this lesson asks for? */
+async function ruleTriggerMatches(content: string, trigger: RuleTrigger): Promise<boolean> {
   const { frontmatter } = parseFrontmatter(content);
   const list = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : typeof value === "string" ? [value] : [];
 
-  switch (trigger.kind) {
-    case "always":
-      return frontmatter.alwaysApply === true;
-    case "globs":
-      return list(frontmatter.globs).includes(trigger.value);
-    case "condition":
-      return list(frontmatter.condition).includes(trigger.value);
-    case "ast":
-      return list(frontmatter.astCondition).includes(trigger.value);
-    case "agent":
-      return list(frontmatter.agents).includes(trigger.value);
-  }
+  if (trigger.always === true && frontmatter.alwaysApply !== true) return false;
+  if (trigger.condition !== undefined && !list(frontmatter.condition).includes(trigger.condition)) return false;
+  if (trigger.ast !== undefined && !list(frontmatter.astCondition).includes(trigger.ast)) return false;
+  if (trigger.globs !== undefined && !list(frontmatter.globs).includes(trigger.globs)) return false;
+  if (trigger.agent !== undefined && !list(frontmatter.agents).includes(trigger.agent)) return false;
+  if (trigger.scope !== undefined && !list(frontmatter.scope).includes(trigger.scope)) return false;
+  if (trigger.interrupt !== undefined && frontmatter.interruptMode !== trigger.interrupt) return false;
+  return true;
 }
 
 /** Rule frontmatter, mirroring the host's `RuleFrontmatter` keys. */
-function toRuleFrontmatter(description: string, trigger: AppliesTo | undefined): string {
+function toRuleFrontmatter(description: string, trigger: RuleTrigger | undefined): string {
   const lines = [`description: ${yamlScalar(description)}`];
-  switch (trigger?.kind) {
-    case "always":
-      lines.push("alwaysApply: true");
-      break;
-    case "globs":
-      lines.push("globs:", `  - ${yamlScalar(trigger.value)}`);
-      break;
-    case "condition":
-      lines.push("condition:", `  - ${yamlScalar(trigger.value)}`);
-      break;
-    case "ast":
-      lines.push("astCondition:", `  - ${yamlScalar(trigger.value)}`);
-      break;
-    case "agent":
-      lines.push("agents:", `  - ${yamlScalar(trigger.value)}`);
-      break;
-    default:
-      break;
-  }
+  const list = (key: string, value: string): void => {
+    lines.push(`${key}:`, `  - ${yamlScalar(value)}`);
+  };
+  if (trigger?.always === true) lines.push("alwaysApply: true");
+  if (trigger?.condition !== undefined) list("condition", trigger.condition);
+  if (trigger?.ast !== undefined) list("astCondition", trigger.ast);
+  if (trigger?.globs !== undefined) list("globs", trigger.globs);
+  if (trigger?.agent !== undefined) list("agents", trigger.agent);
+  if (trigger?.scope !== undefined) list("scope", trigger.scope);
+  if (trigger?.interrupt !== undefined) lines.push(`interruptMode: ${trigger.interrupt}`);
   return `---\n${lines.join("\n")}\n---\n`;
 }
 

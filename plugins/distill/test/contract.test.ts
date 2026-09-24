@@ -3,8 +3,10 @@ import { loadSession, resolveBranch } from "../src/store";
 import { buildBundle } from "../src/trace";
 import {
   ANSWER_CONTRACT_VERSION,
+  INTERRUPT_MODES,
   MAX_LESSON_BODY_CHARS,
   parseAppliesTo,
+  readAppliesTo,
   type ProposedLesson,
   targetProblems,
   lessonId,
@@ -54,9 +56,10 @@ const validLesson: ProposedLesson = {
 describe("the propose_lessons contract", () => {
   test("is the schema and the mechanical instructions, versioned by shape", () => {
     expect(PROPOSE_LESSONS_TOOL).toBe("propose_lessons");
-    // 2 since `removes`: the answer a v1-shaped lesson comes from and the answer a trim comes from
-    // are different shapes, and the ledger has to be able to tell them apart.
-    expect(ANSWER_CONTRACT_VERSION).toBe(2);
+    // 2 since `removes`: an answer from before it and one after are different shapes. 3 since
+    // `applies_to` became a clause list: the same field now carries the trigger and its delivery
+    // (ADR-0016, ADR-0019).
+    expect(ANSWER_CONTRACT_VERSION).toBe(3);
 
     const schema = PROPOSE_LESSONS_PARAMETERS as {
       required: string[];
@@ -187,16 +190,66 @@ describe("the propose_lessons contract", () => {
     expect(targetProblems("append_system", "RULES.md")).toHaveLength(1);
   });
 
-  test("a rule's trigger is one of the host's own shapes, or nothing", () => {
-    expect(parseAppliesTo("always")).toEqual({ kind: "always" });
-    expect(parseAppliesTo("globs:**/*.sql")).toEqual({ kind: "globs", value: "**/*.sql" });
-    expect(parseAppliesTo("condition:\bterraform apply\b")).toEqual({ kind: "condition", value: "\bterraform apply\b" });
-    expect(parseAppliesTo("ast:$A + $B")).toEqual({ kind: "ast", value: "$A + $B" });
-    expect(parseAppliesTo("agent:reviewer")).toEqual({ kind: "agent", value: "reviewer" });
-    expect(parseAppliesTo("")).toBeUndefined();
+  test("a rule's trigger is a clause list in the host's own frontmatter keys", () => {
+    // One clause, as before — an old lesson and a new one write the same file.
+    expect(parseAppliesTo("always")).toEqual({ trigger: { always: true }, problems: [] });
+    expect(parseAppliesTo("globs:**/*.sql")).toEqual({ trigger: { globs: "**/*.sql" }, problems: [] });
+    expect(parseAppliesTo("condition:\\bterraform apply\\b")).toEqual({
+      trigger: { condition: "\\bterraform apply\\b" },
+      problems: [],
+    });
+    expect(parseAppliesTo("ast:$A + $B")).toEqual({ trigger: { ast: "$A + $B" }, problems: [] });
+    expect(parseAppliesTo("agent:reviewer")).toEqual({ trigger: { agent: "reviewer" }, problems: [] });
+    // …and a list, which is what carries the two keys that shape a match rather than make one.
+    expect(parseAppliesTo(["condition:\\bhttpx\\b", "scope:tool:bash", "interrupt:never"])).toEqual({
+      trigger: { condition: "\\bhttpx\\b", scope: "tool:bash", interrupt: "never" },
+      problems: [],
+    });
+    expect(parseAppliesTo(["always", "agent:reviewer", "globs:**/*.sql"])).toEqual({
+      trigger: { always: true, agent: "reviewer", globs: "**/*.sql" },
+      problems: [],
+    });
+    expect(parseAppliesTo(undefined)).toEqual({ problems: [] });
+    expect(parseAppliesTo("  ")).toEqual({ problems: [] });
+    expect(readAppliesTo(" condition:x ")).toBe("condition:x");
+    expect(readAppliesTo(["condition:x", "  "])).toEqual(["condition:x"]);
+    expect(readAppliesTo("   ")).toBeUndefined();
+    expect(readAppliesTo(7)).toBeUndefined();
 
     for (const bad of ["sometimes", "globs:", "globs: ", "agent:Bad Name", "whenever I feel like it"]) {
-      expect(parseAppliesTo(bad)).toBeUndefined();
+      const parsed = parseAppliesTo(bad);
+      expect(parsed.problems.length).toBe(1);
+      expect(parsed.trigger ?? {}).toEqual({});
+    }
+  });
+
+  test("a clause list is refused when it could not mean anything", () => {
+    // Two triggers: the host's buckets are exclusive, so the second would be dead frontmatter.
+    const twoTriggers = parseAppliesTo(["condition:a", "ast:b"]);
+    expect(twoTriggers.problems.join(" ")).toContain("a rule fires one way");
+    const alwaysAndCondition = parseAppliesTo(["always", "condition:a"]);
+    expect(alwaysAndCondition.problems.join(" ")).toContain("a rule fires one way");
+
+    // A modifier with nothing to modify: the host ignores scope on a rule that never matches.
+    for (const orphan of ["scope:text", "interrupt:never", "scope:tool:edit(*.rs)"]) {
+      const parsed = parseAppliesTo([orphan]);
+      expect(parsed.problems.join(" ")).toContain("needs a condition:<regex> or ast:<pattern>");
+    }
+
+    // Values the host itself would drop or refuse.
+    expect(parseAppliesTo("scope:has space").problems.join(" ")).toContain("is not a stream");
+    expect(parseAppliesTo("interrupt:sometimes").problems.join(" ")).toContain("is not a mode");
+    expect(parseAppliesTo("interrupt:nevr").problems.join(" ")).toContain("not a mode");
+    expect(parseAppliesTo(["globs:a", "globs:b"]).problems.join(" ")).toContain("was given twice");
+
+    // Valid ones, including the host's own scope vocabulary.
+    for (const fine of ["scope:text", "scope:thinking", "scope:tool", "scope:toolcall", "scope:tool:bash", "scope:edit(*.rs)"]) {
+      const parsed = parseAppliesTo(["condition:x", fine]);
+      expect(parsed.problems).toEqual([]);
+      expect(parsed.trigger?.scope).toBeDefined();
+    }
+    for (const mode of INTERRUPT_MODES) {
+      expect(parseAppliesTo(["condition:x", `interrupt:${mode}`]).problems).toEqual([]);
     }
   });
 
@@ -224,7 +277,7 @@ describe("the propose_lessons contract", () => {
       [{ verdict: "x", lessons: [{ ...validLesson, citations: [] }] }, "citations must name at least one"],
       [{ verdict: "x", lessons: [{ ...validLesson, citations: ["not-a-qualified-id"] }] }, "malformed id"],
       [{ verdict: "x", lessons: [{ ...validLesson, target: "Bad Name" }] }, "target must be a skill slug"],
-      [{ verdict: "x", lessons: [{ ...validLesson, kind: "rule", target: "fine", applies_to: "whenever" }] }, "applies_to must be"],
+      [{ verdict: "x", lessons: [{ ...validLesson, kind: "rule", target: "fine", applies_to: "whenever" }] }, "carries no value"],
     ];
 
     for (const [input, expected] of cases) {

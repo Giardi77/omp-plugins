@@ -42,6 +42,26 @@ something close gets the change, never a duplicate.
   run, a file pattern, a shape of edit — belongs in a rule under `.omp/rules/`, and you say
   what fires it. A rule that fires always is the most expensive thing you can propose: its
   full text rides every request, so reserve it for what must never be missed.
+
+  What fires it is that file's frontmatter, and these are the keys the host reads:
+
+  - `condition` — a regex the stream has to match. `astCondition` — an ast-grep pattern the
+    payload of an edit or write has to match. `alwaysApply` — no matching at all.
+  - `globs` — the paths the rule is about; `agents` — which agent it applies to (`main` for
+    the top-level session). Neither one fires the rule; they narrow where it is true.
+  - `scope` — which streams `condition`/`astCondition` are matched against: `text`,
+    `thinking`, `tool`, `toolcall`, `tool:<name>`, or `tool:<name>(<glob>)` such as
+    `tool:edit(*.sql)`. A condition naming a tool also matches prose about that tool;
+    `scope:tool:bash` is how you say "the command, not the discussion".
+  - `interruptMode` — what a match does. `always` stops the generation and re-asks with the
+    rule in hand; `never` folds the rule into the tool result and asks for nothing again, which
+    is what you want when stopping mid-command would lose work; `prose-only` and `tool-only`
+    narrow where it stops.
+
+  You write those as `applies_to` clauses and the tool's description carries the grammar — this
+  is the vocabulary, not the syntax. `question` (a judge model's yes/no on every completed
+  output, a model call each time) and `enabled` are the operator's keys, not yours: argue for
+  one in `rationale` if a rule needs it.
 - **A subagent's own behaviour** belongs in that agent's file under `.omp/agents/`.
 - **Something permanent the main agent must always respect** belongs in
   `.omp/APPEND_SYSTEM.md` — the loudest surface there is. If it applies only sometimes, or is

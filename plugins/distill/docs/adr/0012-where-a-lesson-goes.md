@@ -29,6 +29,12 @@ different trigger is refused rather than silently merged, and adding to the body
 for every token, and the ledger's decision row already records which lesson wrote what, from which
 session, under which prompt. Provenance belongs where it is asked for, not in the instruction.
 
+**Amended 2026-09-25 (the rule vocabulary)**: `applies_to` became a clause list, and `scope` and
+`interruptMode` joined the writable keys (ADR-0019). The shipped `evaluator.md` now names the host's
+rule frontmatter keys, because the operator wants the vocabulary where the writing happens — the
+grammar, the composition rules and the refusals stay in the tool description (D15), so the prompt can be
+rewritten by whoever owns the project without changing what the plugin accepts.
+
 **Considered Options**: teaching the model the raw frontmatter and letting it write whole files —
 rejected, the plugin would be validating model-authored YAML for no gain, and the review window
 would show a file rather than a lesson; a free-text `target` field with no vocabulary — rejected,

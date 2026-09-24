@@ -45,8 +45,8 @@ export interface StoredLesson {
   title: string;
   body: string;
   target: string;
-  /** Rules only: what fires the rule; proposal-time, and written into the rule's frontmatter. */
-  applies_to?: string;
+  /** Rules only: what fires the rule and how it lands; proposal-time, written into the frontmatter. */
+  applies_to?: string | string[];
   /** Lines to take out of the target file, quoted as the evaluator read them. */
   removes?: string;
   rationale: string;
@@ -319,7 +319,9 @@ export function isStoredLesson(value: unknown): value is StoredLesson {
     typeof value.title === "string" &&
     typeof value.body === "string" &&
     typeof value.target === "string" &&
-    (value.applies_to === undefined || typeof value.applies_to === "string") &&
+    (value.applies_to === undefined ||
+      typeof value.applies_to === "string" ||
+      (Array.isArray(value.applies_to) && value.applies_to.every(clause => typeof clause === "string"))) &&
     (value.removes === undefined || typeof value.removes === "string") &&
     Array.isArray(value.citations) &&
     isRecord(value.provenance)
