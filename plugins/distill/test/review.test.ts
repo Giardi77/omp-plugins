@@ -176,11 +176,14 @@ interface Terminal {
   ctx: ExtensionCommandContext;
   mounted(): ReviewWindow;
   options(): unknown;
+  /** The terminal the window is painting into, as the host would resize it. */
+  terminal: { rows: number };
 }
 
-function terminalContext(): Terminal {
+function terminalContext(rows = 24): Terminal {
   let mounted: ReviewWindow | undefined;
   let options: unknown;
+  const liveTerminal = { rows };
   const ctx = {
     mode: "tui",
     hasUI: true,
@@ -188,7 +191,7 @@ function terminalContext(): Terminal {
       notify: () => {},
       custom: (
         factory: (
-          tui: { requestRender: () => void },
+          tui: { requestRender: () => void; terminal: { rows: number } },
           theme: ReviewTheme,
           keybindings: unknown,
           done: (outcome: ReviewOutcome) => void,
@@ -197,12 +200,14 @@ function terminalContext(): Terminal {
       ) => {
         options = customOptions;
         return new Promise<ReviewOutcome>(resolve => {
-          mounted = factory({ requestRender: () => {} }, theme, {}, resolve);
+          // The real TUI carries the terminal it is painting into, and the window reads its height
+          // on every render so a resize is followed rather than remembered.
+          mounted = factory({ requestRender: () => {}, terminal: liveTerminal }, theme, {}, resolve);
         });
       },
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, mounted: () => mounted!, options: () => options };
+  return { ctx, mounted: () => mounted!, options: () => options, terminal: liveTerminal };
 }
 
 describe("ReviewWindow", () => {
@@ -453,7 +458,7 @@ describe("ReviewWindow", () => {
     // The overlay is anchored to the bottom, so a frame that outgrows the screen loses its *top*:
     // the recap and the list, which is what "the top text is cut off" was. Both views fill the
     // screen and neither may pass it.
-    for (const rows of [12, 24, 40, 80]) {
+    for (const rows of [6, 9, 12, 24, 40, 80]) {
       const tight = sit([tall()], {}, rows);
       expect(tight.window.render(WIDTH).length).toBe(rows);
       tight.window.handleInput("c");
@@ -470,7 +475,7 @@ describe("ReviewWindow", () => {
     // The top of the pane is what is shown, and the pane says how much is below it.
     expect(before).toContain("The lesson:");
     expect(before).not.toContain("body line 39");
-    expect(before).toContain("more line(s) — PgUp/PgDn or the wheel scrolls this pane");
+    expect(before).toContain("more line(s) — PgUp/PgDn scrolls this pane");
 
     tight.window.handleInput(PAGE_DOWN);
     const scrolled = tight.text();
@@ -484,23 +489,6 @@ describe("ReviewWindow", () => {
     expect(tight.text()).toContain("The lesson:");
     expect(tight.text()).toContain("more line(s) — PgUp/PgDn");
     expect(tight.text()).not.toContain("above");
-  });
-
-  test("the wheel over the pane scrolls the pane, and over the list it moves the list", () => {
-    // Frame rows: row 0 is the panel's border, the recap follows, then the list, then the pane.
-    const overList = "\x1b[<65;10;3M";
-    const overPane = "\x1b[<65;10;20M";
-
-    const onList = sit([tall(), entry("two"), entry("three")], {}, 24);
-    onList.window.handleInput(overList);
-    expect(onList.text()).toContain("❯ Title two"); // the selector moved down one
-
-    const onPane = sit([tall()], {}, 24);
-    const top = onPane.text();
-    onPane.window.handleInput(overPane);
-    expect(onPane.text()).not.toBe(top);
-    expect(onPane.text()).toContain("above ·"); // the pane scrolled, the list did not
-    expect(onPane.text()).toContain("❯ Title one");
   });
 
   test("the recap, the list and then the selected lesson's detail, in that order", () => {
@@ -622,10 +610,14 @@ describe("runReview", () => {
       // The frame is a screenful, so it borrows the alternate screen: nothing behind it, and the
       // terminal's own scrolling cannot move the modal. The rest restates the host's defaults,
       // which supplying options replaces wholesale.
-      overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true },
+      overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false },
     });
     const mounted = terminal.mounted();
     expect(mounted.render(WIDTH).join("\n")).toContain("Title two");
+    // The height is read per render, so a resized terminal is followed rather than remembered.
+    expect(mounted.render(WIDTH).length).toBe(24);
+    terminal.terminal.rows = 12;
+    expect(mounted.render(WIDTH).length).toBe(12);
 
     mounted.handleInput(DOWN);
     mounted.handleInput("a");

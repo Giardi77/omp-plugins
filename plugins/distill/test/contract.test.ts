@@ -63,7 +63,7 @@ describe("the propose_lessons contract", () => {
       additionalProperties: boolean;
       properties: Record<
         string,
-        { enum?: string[]; minItems?: number; items?: { required?: string[]; properties?: Record<string, unknown> } }
+        { enum?: string[]; minItems?: number; items?: { required?: string[]; properties?: Record<string, { description?: string }> } }
       >;
     };
     expect(schema.required).toEqual(["verdict", "lessons"]);
@@ -107,6 +107,23 @@ describe("the propose_lessons contract", () => {
     // Whitespace-only `removes` is still not a removal.
     const blank = parseAnswer({ verdict: "nothing", lessons: [{ ...validLesson, body: "", removes: "   " }] });
     expect(blank.ok).toBe(false);
+  });
+
+  test("a reference must open with the sentence that says what it explains", () => {
+    const reference: ProposedLesson = {
+      ...validLesson,
+      kind: "skill_reference",
+      target: "retry-helper/ci-load",
+      body: "What changes when CI load makes a retry come back sooner than the sleep expects.",
+    };
+    expect(parseAnswer({ verdict: "one detail", lessons: [reference] })).toMatchObject({ ok: true });
+
+    const headingFirst = parseAnswer({ verdict: "one detail", lessons: [{ ...reference, body: "## Backoff\n\nSleep 250ms." }] });
+    expect(headingFirst.ok).toBe(false);
+    expect(headingFirst.ok || headingFirst.error).toContain("must open with one sentence");
+
+    // The rule is the reference's: a skill's body may open with whatever it likes.
+    expect(parseAnswer({ verdict: "a skill", lessons: [validLesson] }).ok).toBe(true);
   });
 
   test("every surface OMP offers is a kind, and each kind checks its target", () => {

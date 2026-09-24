@@ -11,7 +11,6 @@ import {
   type SelectListTheme,
 } from "@oh-my-pi/pi-tui";
 import { OverlayPanel } from "@oh-my-pi/pi-tui/chrome";
-import { parseSgrMouse } from "@oh-my-pi/pi-tui/mouse";
 import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { describeChange, renderFileChange, type FileChange } from "./diff";
 import type { StoredLesson } from "./lessons";
@@ -106,6 +105,11 @@ function selectListTheme(theme: ReviewTheme): SelectListTheme {
   };
 }
 
+/** Pad `lines` with blanks to exactly `height` rows. */
+function fill(lines: string[], height: number): string[] {
+  return [...lines, ...Array.from({ length: Math.max(0, height - lines.length) }, () => "")];
+}
+
 /** Quote `lines` from the head, naming how much was left out. */
 function capped(lines: string[], limit: number, note: (hidden: number) => string): string[] {
   return lines.length <= limit ? lines : [...lines.slice(0, limit), note(lines.length - limit)];
@@ -136,9 +140,6 @@ export class ReviewWindow implements Component {
   /** How far into the selected lesson's detail the pane is scrolled, and how much a page is. */
   #detailOffset = 0;
   #detailPage = 1;
-  /** Frame rows the detail pane covers (row 0 is the panel's top border), for wheel hit-testing. */
-  #paneTop = 0;
-  #paneBottom = -1;
   /** The list's row budget as last rendered, so the height is recomputed only when it changes. */
   #listRows = 0;
   #outcome: ReviewOutcome = { accepted: [], denied: [], quit: false };
@@ -149,7 +150,7 @@ export class ReviewWindow implements Component {
     private readonly requestRender: () => void,
     private readonly done: (outcome: ReviewOutcome) => void,
     private readonly handlers: ReviewHandlers,
-    private readonly options?: { rows?: number },
+    private readonly options?: { rows?: number | (() => number) },
   ) {
     // Undecided lessons only: a decided lesson is never listed, let alone decided twice.
     this.#entries = entries.filter(entry => entry.lesson.state === "proposed");
@@ -198,9 +199,6 @@ export class ReviewWindow implements Component {
       else if (data === "k" || matchesKey(data, "up")) this.#changesetOffset = Math.max(0, this.#changesetOffset - 1);
       else if (matchesKey(data, "pageDown")) this.#changesetOffset += this.#changesetPage;
       else if (matchesKey(data, "pageUp")) this.#changesetOffset = Math.max(0, this.#changesetOffset - this.#changesetPage);
-      else this.#handleWheel(data, delta => {
-        this.#changesetOffset = Math.max(0, this.#changesetOffset + delta * this.#changesetPage);
-      });
       this.requestRender();
       return;
     }
@@ -255,30 +253,11 @@ export class ReviewWindow implements Component {
       this.#scrollDetail(-1);
       return;
     }
-    if (this.#handleWheel(data, delta => this.#scrollDetail(delta))) return;
-
     // The list owns ↑/↓; j/k are the same moves under the window's keys.
     if (data === "j") this.#list.handleInput("\x1b[B");
     else if (data === "k") this.#list.handleInput("\x1b[A");
     else this.#list.handleInput(data);
     this.requestRender();
-  }
-
-  /**
-   * The wheel scrolls whatever it is over: the detail pane when the pointer is on it, the list of
-   * lessons otherwise. Returns false when `data` is not a wheel report, so other keys fall through.
-   */
-  #handleWheel(data: string, scroll: (delta: -1 | 1) => void): boolean {
-    if (!data.startsWith("\x1b[<")) return false;
-    const event = parseSgrMouse(data);
-    if (event === null || event.wheel === null) return true;
-
-    // Rows are frame-local and the frame starts at the panel's top border.
-    const overPane = event.row >= this.#paneTop && event.row <= this.#paneBottom;
-    if (overPane) scroll(event.wheel);
-    else this.#list.handleWheel(event.wheel);
-    this.requestRender();
-    return true;
   }
 
   /** One page of the detail pane, clamped to what is actually there. */
@@ -288,13 +267,19 @@ export class ReviewWindow implements Component {
   }
 
   #rows(): number {
-    const rows = this.options?.rows ?? process.stdout.rows ?? 0;
+    const declared = this.options?.rows;
+    const rows = (typeof declared === "function" ? declared() : declared) ?? process.stdout.rows ?? 0;
     return rows > 0 ? rows : 24;
   }
 
-  /** The rows the body may use: the panel's own border is painted outside them. */
+  /**
+   * The rows the body may use: the panel's own border is painted outside them. The floor is 1, not
+   * a comfortable number: the frame landing on the terminal's edges is what keeps the recap and the
+   * list on screen, and on a screen too short for both, cutting the hints is better than the engine
+   * cutting the top.
+   */
   #budget(): number {
-    return Math.max(8, this.#rows() - 2);
+    return Math.max(1, this.#rows() - 2);
   }
 
   /**
@@ -488,12 +473,9 @@ export class ReviewWindow implements Component {
     const paneRows = room - list.length;
     const wanted = entry === undefined || paneRows < DETAIL_MIN_LINES;
     const detail = wanted ? [] : this.#renderDetail(entry, width);
-    const pane = wanted ? [] : this.#windowDetail(detail, paneRows);
-
-    // The pane's frame rows, for wheel hit-testing: + 1 for the blank above it, + 1 for the border
-    // the panel paints as row 0.
-    this.#paneTop = recap.length + list.length + 2;
-    this.#paneBottom = this.#paneTop + pane.length - 1;
+    // The pane is padded to the rows it was given, so the hints and the status sit on the frame's
+    // last rows instead of the blanks floating under them.
+    const pane = wanted ? [] : fill(this.#windowDetail(detail, paneRows), paneRows);
 
     const lines = [...recap, ...list, ...(pane.length === 0 ? [] : ["", ...pane]), ...footer];
     return this.#frame(lines, width, budget);
@@ -513,7 +495,7 @@ export class ReviewWindow implements Component {
     const below = detail.length - offset - shown.length;
     const where =
       offset === 0 ? `${below} more line(s)` : below === 0 ? `${offset} above` : `${offset} above · ${below} below`;
-    return [...shown, muted(this.theme, `… ${where} — PgUp/PgDn or the wheel scrolls this pane`)];
+    return [...shown, muted(this.theme, `… ${where} — PgUp/PgDn scrolls this pane`)];
   }
 
   /** What this batch is, before any of it is read: the count, the files, what cannot be written. */
@@ -576,7 +558,7 @@ export class ReviewWindow implements Component {
     const offset = Math.min(this.#changesetOffset, Math.max(0, body.length - height));
     this.#changesetOffset = offset;
     this.#changesetPage = height;
-    const visible = body.slice(offset, offset + height);
+    const visible = fill(body.slice(offset, offset + height), height);
     const more = body.length - offset - visible.length;
 
     return this.#frame(
@@ -678,11 +660,31 @@ export async function runReview(
 
   return ctx.ui.custom<ReviewOutcome>(
     (tui: TUI, theme, _keybindings, done) =>
-      new ReviewWindow(entries, theme as unknown as ReviewTheme, () => tui.requestRender(), done, handlers),
+      new ReviewWindow(
+        entries,
+        theme as unknown as ReviewTheme,
+        () => tui.requestRender(),
+        done,
+        handlers,
+        { rows: () => tui.terminal.rows },
+      ),
     // The window's frame is a screenful, so it borrows the alternate screen the way `less` does:
     // nothing sits behind it, and the terminal's own scrollback cannot scroll the modal off the
     // viewport — which is what it looked like when the frame was taller than a zoomed terminal.
     // The host's defaults are restated because supplying options replaces them wholesale.
-    { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true } },
+    {
+      overlay: true,
+      overlayOptions: {
+        width: "100%",
+        maxHeight: "100%",
+        margin: 0,
+        fullscreen: true,
+        // The modal owns the screen, but the pointer belongs to the terminal: with mouse reporting
+        // on, dragging selects nothing — every report is swallowed — and copying a path or a lesson
+        // out of the window is the one thing an operator does with a mouse here. Scrolling is a key
+        // (PgUp/PgDn) precisely so the pointer does not have to mean two things.
+        mouseTracking: false,
+      },
+    },
   );
 }

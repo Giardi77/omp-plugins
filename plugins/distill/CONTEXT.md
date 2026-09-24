@@ -34,6 +34,8 @@ _Avoid_: —
 **Lesson**:
 Something a trace teaches, and the unit that moves through the loop: proposed, then approved or
 denied, then written into one of the project's own surfaces — a skill (or one of its references),
+where a reference is named and titled as the sub-problem it covers and opens with the sentence
+saying so, because that title is all an agent sees in `SKILL.md` when deciding to open it
 a rule, a subagent prompt, or `APPEND_SYSTEM.md`.
 _Avoid_: candidate, insight, knowledge, memory
 
@@ -59,7 +61,7 @@ _Avoid_: block, permission, refusal, rejection
 
 **Review**:
 The interactive act of deciding proposed lessons: `/distill review` opens a window over them — a
-screenful, on the alternate screen, its detail pane scrolled with `PgUp`/`PgDn` or the wheel — showing
+screenful, on the alternate screen, its detail pane scrolled with `PgUp`/`PgDn` — showing
 the selected lesson's text, target and citations, and taking accept or deny. Accept writes at once;
 there is no headless review.
 _Avoid_: triage, inbox, queue

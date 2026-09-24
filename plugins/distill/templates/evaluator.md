@@ -51,7 +51,11 @@ something close gets the change, never a duplicate.
   problem.
 - **A sub-problem of a skill that is not always encountered** belongs in that skill's
   `references/` directory, with the skill's `SKILL.md` pointing at it. The skill stays the
-  entry point; the reference holds the detail.
+  entry point; the reference holds the detail. A reference is written for the agent who will
+  need it later, not for the operator now: name it and title it as the sub-problem, and open it
+  with one sentence saying what it covers and what should send an agent here. That title is the
+  whole of what the agent sees in `SKILL.md` when deciding whether to open it, and that sentence
+  is what a search lands on — a reference that does not say what it is about is one nobody finds.
 
 Ask first whether editing what exists would do the job: a file nobody needs is worse than no
 lesson at all.

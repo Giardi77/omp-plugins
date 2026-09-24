@@ -88,8 +88,9 @@ then shows each lesson as a diff of the file it writes (a new file, an append wi
 tail as context, or a trim with the lines going out marked), why it is worth keeping, and the cited
 records behind `e`; `c` shows every change in the batch at once. The window is a screenful — the
 border sits on the terminal's edges, so nothing is clipped — and the detail pane scrolls a page at a
-time with `PgUp`/`PgDn` or the wheel when a lesson is longer than the room left for it. It borrows
-the alternate screen while it is open, so the terminal's own scrollback cannot move it.
+time with `PgUp`/`PgDn` when a lesson is longer than the room left for it. It borrows the alternate
+screen while it is open, so the terminal's own scrollback cannot move it — and it leaves the pointer
+to the terminal, so click-and-drag still selects text (copying a path or a lesson out).
 
 ## What leaves the machine
 

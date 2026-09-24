@@ -93,6 +93,11 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `- \`skill_reference\` — a sub-problem of a skill that is not always encountered. \`target\` is`,
   `  "<skill-slug>/<reference-name>". The reference lands in .omp/skills/<slug>/references/, and the`,
   `  skill's SKILL.md gains the line pointing at it; the skill stays the entry point.`,
+  `  A reference exists so a future agent can find it: name and title it as the sub-problem itself`,
+  `  ("sqlite-lock-timeouts" / "SQLite lock timeouts under load"), never as an improvement or a`,
+  `  narrative, because the title is the whole of what the agent sees in SKILL.md when deciding`,
+  `  whether to open it. Its body must open with one sentence saying what the file covers and the`,
+  `  situation that should send an agent here — that sentence is what a search or a grep lands on.`,
   `- \`rule\` — behaviour that can be stated exactly for a situation you can name. \`target\` is the`,
   `  rule's name and \`applies_to\` says what fires it:`,
   `    "always"            — every request, full text injected (the loudest rule; use it sparingly)`,
@@ -319,6 +324,16 @@ export function parseAnswer(raw: unknown): AnswerParse {
     if (removes !== undefined && removes === "") errors.push(`${where}.removes was given as empty text; omit it instead`);
     if ((strings.body ?? "") === "" && (removes === undefined || removes === "")) {
       errors.push(`${where}.body must be a non-empty string, or \`removes\` the lines it takes out instead`);
+    }
+    // A reference has to say what it is about in its first line: an agent that opens the file, or
+    // greps the skills directory, decides from that line whether this is the thing it needs.
+    if (kind === "skill_reference") {
+      const opener = (strings.body ?? "").split("\n")[0]?.trim() ?? "";
+      if (opener.length < 24 || !/[.?!]$/.test(opener)) {
+        errors.push(
+          `${where}.body must open with one sentence — the line that says what this reference explains and when to read it — before any formatting or headings`,
+        );
+      }
     }
     const appliesTo = typeof lesson.applies_to === "string" ? lesson.applies_to.trim() : undefined;
     if (appliesTo !== undefined && appliesTo !== "" && !parseAppliesTo(appliesTo)) {

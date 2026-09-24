@@ -11,7 +11,7 @@
     },
     "plugins/distill": {
       "name": "omp-distill-extension",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "18.3.0",
         "@oh-my-pi/pi-tui": "18.3.0",

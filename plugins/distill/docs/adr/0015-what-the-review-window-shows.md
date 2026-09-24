@@ -66,8 +66,7 @@ Two changes, and they are really one:
   than guessed: the recap and the key hints hold theirs, the list shrinks first, and the detail pane
   takes what is left — with a floor below which the list is the better use of a small screen. The
   old fixed `RESERVED_LINES = 16` was a guess at a number the terminal knows.
-- **What does not fit scrolls inside the pane.** `PgUp`/`PgDn` (and the wheel, when the pointer is
-  over the pane) move it a page at a time; the last row of the pane says how much is above and
+- **What does not fit scrolls inside the pane.** `PgUp`/`PgDn` move it a page at a time; the last row of the pane says how much is above and
   below, and the offset resets when the selection changes, because the next lesson's detail starts
   at its own top. The list keeps ↑/↓ and j/k: paging a list of titles is not a move anyone needs,
   and the pane is the thing that does not fit.
@@ -78,6 +77,16 @@ viewport: scrolling the terminal up shows the transcript and no window at all, w
 half of what the operator was looking at. On the alternate screen nothing sits behind it and there
 is no scrollback to scroll into. Supplying `overlayOptions` replaces the host's defaults wholesale,
 so the width, height and margin are restated alongside it.
+
+One more thing came out of the operator using it: "i can't select stuff". `fullscreen: true` turns
+mouse reporting on, which is what makes the wheel possible — and what stops the terminal from
+selecting text, because every press and drag arrives as an escape sequence instead. The window also
+swallowed those reports, so a click did nothing at all. Reporting is now off (`mouseTracking:
+false`), which gives the pointer back to the terminal: drag-to-select works, and copying a path or a
+lesson out of the review is one gesture again. The pane's scroll is a key, `PgUp`/`PgDn`, precisely
+so the pointer never has to mean two things. A click-to-pick row would need reporting back on, and
+with it the terminal's own selection gone — a trade the operator can ask for, but not one to make
+for them.
 
 **Considered Options**: cap the pane and say where the rest is (what the first attempt did — it fits
 the screen but the lesson, its reason and its evidence are exactly what the operator is deciding on,
