@@ -7,6 +7,16 @@ type SkillRefreshableCommandContext = ExtensionCommandContext & {
   refreshSkills?: () => Promise<void>;
 };
 
+/**
+ * `registerCommand`'s options as the host actually reads them. The SDK's type has no `icon`; the
+ * host's own commands carry one, and OMP 18.3.0 pins every extension command to its `extension`
+ * glyph instead of reading this field. When it forwards it, this is the name it will resolve —
+ * `toolbox` is the one that reads as the skills you have picked out, and it has to exist in
+ * pi-tui's symbol vocabulary (a name the theme does not know resolves to nothing, and a raw emoji
+ * is not a name at all).
+ */
+type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1] & { icon: string };
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -83,6 +93,9 @@ export default function setupSkillsExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("setup-skills", {
     description: "Select enabled skills for this project and reload the session",
+    // The autocomplete glyph: 🧰, as soon as OMP forwards an extension's own `icon` (see the type
+    // above). Until then the command shows the shared extension glyph, which is the host's choice.
+    icon: "toolbox",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/setup-skills requires the interactive OMP UI.", "error");
@@ -142,5 +155,5 @@ export default function setupSkillsExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(message, "error");
       }
     },
-  });
+  } as CommandOptions);
 }

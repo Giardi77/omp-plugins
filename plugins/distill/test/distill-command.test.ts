@@ -32,6 +32,8 @@ function fakeSpawn(): { spawn: (plan: ScanSpawnPlan) => Promise<{ pid?: number }
 
 type RegisteredCommand = {
   description?: string;
+  /** Not in the SDK's type; the host reads it off the registered options and resolves it by name. */
+  icon?: string;
   getArgumentCompletions?: (prefix: string) => unknown;
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 };
@@ -236,6 +238,10 @@ describe("the distill command", () => {
     expect(labels).toEqual(["Distill"]);
     expect(sessionStart).toHaveLength(1);
     expect(commands.distill?.description).toContain("scan");
+    // The glyph the plugin asks for is a name in the theme's vocabulary, never a raw emoji: the
+    // host resolves it by name. OMP 18.3.0 pins extension commands to the shared extension glyph
+    // and does not read this field yet, so the value here is the intent, not something on screen.
+    expect(commands.distill?.icon).toBe("droplet");
 
     const command = commands.distill!;
     const names = (command.getArgumentCompletions?.("") ?? []) as Array<{ label: string }>;

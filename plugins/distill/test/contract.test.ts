@@ -124,6 +124,20 @@ describe("the propose_lessons contract", () => {
 
     // The rule is the reference's: a skill's body may open with whatever it likes.
     expect(parseAnswer({ verdict: "a skill", lessons: [validLesson] }).ok).toBe(true);
+
+    // …and a reference being trimmed adds no line of its own, so there is nothing to open with.
+    const trimmed = parseAnswer({
+      verdict: "the reference says the same thing twice",
+      lessons: [
+        {
+          ...reference,
+          body: "",
+          removes: "## Old note\n\nSleep at least 250ms between attempts, because CI load makes 100ms flap.",
+        },
+      ],
+    });
+    expect(trimmed.ok).toBe(true);
+    expect(trimmed.ok && trimmed.answer.lessons[0]?.removes).toContain("## Old note");
   });
 
   test("every surface OMP offers is a kind, and each kind checks its target", () => {

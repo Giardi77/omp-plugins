@@ -18,12 +18,24 @@ const FLAGS_BY_SUBCOMMAND: Record<string, string[]> = {
   purge: ["--yes"],
 };
 
+/**
+ * `registerCommand`'s options as the host actually reads them. The SDK's type has no `icon`; the
+ * host's own commands carry one, and OMP 18.3.0 pins every extension command to its `extension`
+ * glyph instead of reading this field. When it forwards it, this is the name it will resolve —
+ * `droplet` is the distillation one, and it has to exist in pi-tui's symbol vocabulary (a name the
+ * theme does not know resolves to nothing, and a raw emoji is not a name at all).
+ */
+type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1] & { icon: string };
+
 export default function distillExtension(pi: ExtensionAPI): void {
   pi.setLabel("Distill");
 
   pi.registerCommand("distill", {
     description:
       "Session learning for this project: setup, enable/disable, status, scan, cancel, review, purge",
+    // The autocomplete glyph: 💧, as soon as OMP forwards an extension's own `icon` (see the type
+    // above). Until then the command shows the shared extension glyph, which is the host's choice.
+    icon: "droplet",
     getArgumentCompletions(argumentPrefix: string) {
       const trimmed = argumentPrefix.trimStart();
       if (trimmed.includes(" ")) {
@@ -42,7 +54,7 @@ export default function distillExtension(pi: ExtensionAPI): void {
         notify(ctx, `distill failed: ${messageOf(error)}`, "error");
       }
     },
-  });
+  } as CommandOptions);
 
   pi.on("session_start", async (_event, ctx) => {
     // One notice per session, and only where a notification actually surfaces: print and

@@ -21,6 +21,8 @@ const previousHomes: Array<string | undefined> = [];
 
 type RegisteredCommand = {
   description?: string;
+  /** Not in the SDK's type; the host reads it off the registered options and resolves it by name. */
+  icon?: string;
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 };
 
@@ -111,6 +113,10 @@ function registeredSetupSkillsCommand(): RegisteredCommand {
   const command = commands["setup-skills"];
   expect(command).toBeDefined();
   expect(command?.description).toBe("Select enabled skills for this project and reload the session");
+  // The glyph the plugin asks for is a name in the theme's vocabulary, never a raw emoji: the host
+  // resolves it by name, and OMP 18.3.0 does not read this field for extension commands yet, so
+  // the value here is the intent, not something on screen.
+  expect(command?.icon).toBe("toolbox");
   return command!;
 }
 

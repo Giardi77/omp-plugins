@@ -326,8 +326,10 @@ export function parseAnswer(raw: unknown): AnswerParse {
       errors.push(`${where}.body must be a non-empty string, or \`removes\` the lines it takes out instead`);
     }
     // A reference has to say what it is about in its first line: an agent that opens the file, or
-    // greps the skills directory, decides from that line whether this is the thing it needs.
-    if (kind === "skill_reference") {
+    // greps the skills directory, decides from that line whether this is the thing it needs. A trim
+    // is the exception it cannot apply to — it takes lines out and adds nothing, so there is no
+    // opening line of its own to check.
+    if (kind === "skill_reference" && (strings.body ?? "") !== "") {
       const opener = (strings.body ?? "").split("\n")[0]?.trim() ?? "";
       if (opener.length < 24 || !/[.?!]$/.test(opener)) {
         errors.push(

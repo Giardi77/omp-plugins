@@ -11,7 +11,7 @@
     },
     "plugins/distill": {
       "name": "omp-distill-extension",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "18.3.0",
         "@oh-my-pi/pi-tui": "18.3.0",
@@ -24,7 +24,7 @@
     },
     "plugins/setup-skills": {
       "name": "omp-setup-skills-extension",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "18.3.0",
         "@oh-my-pi/pi-tui": "18.3.0",
