@@ -208,6 +208,18 @@ export interface RunEvaluationInput {
  * result.
  */
 export async function runEvaluation(input: RunEvaluationInput): Promise<EvaluationRun> {
+  // A scan that was cancelled before this run starts must not pay for it: the abort listener
+  // below cannot fire for a signal that is already aborted.
+  if (input.signal?.aborted) {
+    return {
+      status: "failed",
+      reason: "cancelled",
+      verdict: "",
+      proposals: [],
+      reads: [],
+      traceSessionIds: input.bundle.traces.map(trace => trace.sessionId),
+    };
+  }
   assertHostVersion(input.sdk.VERSION);
   const now = input.now ?? Date.now();
   const deadline = now + input.config.timeout_seconds * 1_000;

@@ -10,7 +10,9 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   discovery, the default evaluator prompt
 - `src/store.ts` — read-only session store: per-project directories, header scan, active-branch
   resolution, subagent pairing
-- `src/trace.ts` — records rendered to a bounded payload (pure) and verbatim excerpts
+- `src/trace.ts` — records rendered to a bounded payload (pure) and verbatim excerpts; the payload
+  summarises tool results (first line + size) and names each transcript, while `excerptFor` renders
+  the cited record in full for the lesson
 - `src/contract.ts` — the `propose_lessons` schema/description, answer validation, citation
   resolution, lesson identity
 - `src/bundle.ts` — one session's parent + subagent traces into one payload

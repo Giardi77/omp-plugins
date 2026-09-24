@@ -30,7 +30,7 @@ import {
 import { runReview, type ReviewEntry } from "./review";
 import { listProjectSessions, sessionTraceIds, type SessionCandidate } from "./store";
 import { CLI_THINKING_LEVELS, parseCliThinkingLevel } from "./thinking";
-import { renderPayload } from "./trace";
+import { renderPayload, type TraceBundle } from "./trace";
 import { fileExists, messageOf } from "./util";
 import { applyWrite, planWrite, readInventory } from "./writer";
 
@@ -333,7 +333,7 @@ async function runScan(
     sessionDir: ctx.sessionManager.getSessionDir(),
   });
   const retired = await retiredTraceSessionIds(paths);
-  const eligible = discovery.sessions.filter(session => !retired.has(session.sessionId));
+  const eligible = await eligibleSessions(discovery.sessions, retired);
   if (eligible.length === 0) {
     notify(ctx, `No unevaluated sessions for this project${discovery.skipped.length > 0 ? ` (${discovery.skipped.length} skipped)` : ""}.`, "info");
     return;
@@ -367,7 +367,7 @@ async function runScan(
   try {
     for (const session of selection) {
       if (cancellation.signal.aborted) break;
-      await scanOne(pi, ctx, paths, config, evaluator, session, flags, model, cancellation.signal);
+      await scanOne(pi, ctx, paths, config, evaluator, session, flags, model, cancellation.signal, retired);
     }
     if (cancellation.signal.aborted) {
       notify(ctx, "Scan cancelled by a purge; run /distill scan again after it finishes.", "warning");
@@ -388,6 +388,7 @@ async function scanOne(
   flags: DistillFlags,
   model: ResolvedModel,
   signal: AbortSignal,
+  retired: ReadonlySet<string>,
 ): Promise<void> {
   const loaded = await loadTraceBundle({ sessionFile: session.path, projectRoot: paths.projectRoot });
   if (!loaded.ok) {
@@ -406,27 +407,38 @@ async function scanOne(
     return;
   }
 
+  // Traces an earlier evaluation already covered are not re-sent: a retry pays only for what
+  // is still open, which is what per-trace retirement means.
+  const covered = loaded.bundle.traces.filter(trace => retired.has(trace.sessionId)).length;
+  const pending: TraceBundle = { ...loaded.bundle, traces: loaded.bundle.traces.filter(trace => !retired.has(trace.sessionId)) };
+  if (pending.traces.length === 0) {
+    notify(ctx, `${session.sessionId}: every trace is already evaluated.`, "info");
+    return;
+  }
+
   const renderOptions = { includeThinking: config.include_thinking };
   const budget = payloadBudgetChars(model.model);
-  const plan = planEvaluations(loaded.bundle, budget, renderOptions);
+  const plan = planEvaluations(pending, budget, renderOptions);
 
   if (flags.dryRun) {
     // The dry run prints what a scan would send, one payload per planned evaluation.
     for (const group of plan.groups) showPayload(ctx, renderPayload(group, renderOptions));
     if (plan.oversized.length > 0) {
-      notify(ctx, oversizedNotice(session, plan.oversized, budget), "warning");
+      notify(ctx, oversizedNotice(session.sessionId, plan.oversized, budget), "warning");
     }
     return;
   }
 
+  // A trace too big to send is reported and left eligible, but never blocks the traces that
+  // do fit: the evaluation continues with whatever the model can take.
   if (plan.oversized.length > 0) {
-    const reason = oversizedNotice(session, plan.oversized, budget);
+    const reason = oversizedNotice(session.sessionId, plan.oversized, budget);
     await appendLedger(
       paths,
       evaluationRecord({
         sessionId: session.sessionId,
         sessionFile: session.path,
-        traceSessionIds: plan.oversized.map(entry => entry.traceId),
+        traceSessionIds: plan.oversized.map(entry => entry.sessionId),
         outcome: "failed",
         reason,
         promptSha256: evaluator.sha256,
@@ -436,18 +448,23 @@ async function scanOne(
     // Nothing to quote: the payload is exactly what could not be sent, so the dump carries
     // the sizes that made it unsendable.
     const dump = await writeFailureDump(paths, session, reason, "", [], { oversized: plan.oversized });
+    const rest =
+      plan.groups.length > 0
+        ? `the other ${plan.groups.length} trace(s) are evaluated now`
+        : "nothing can be sent for them";
     notify(
       ctx,
-      `${session.sessionId}: ${reason}${loaded.warnings.length > 0 ? ` (${loaded.warnings.length} subagent trace(s) skipped)` : ""}. It stays eligible; nothing was truncated. A dump is in ${path.relative(paths.projectRoot, dump)}.`,
+      `${reason} — ${rest}; they stay eligible and nothing was truncated. A dump is in ${path.relative(paths.projectRoot, dump)}.`,
       "error",
     );
-    return;
   }
+
+  if (plan.groups.length === 0) return;
 
   const split = plan.groups.length > 1;
   notify(
     ctx,
-    `Evaluating ${describeSession(session)} (${loaded.bundle.traces.length} trace(s)${split ? `, ${plan.groups.length} runs — the session is bigger than ${Math.round(budget / 1000)}k characters, so it is split by trace` : ""}) — this can take a while.`,
+    `Evaluating ${describeSession(session)} (${pending.traces.length} trace(s)${covered > 0 ? `, ${covered} already evaluated` : ""}${split ? `, ${plan.groups.length} runs — the session is bigger than ${Math.round(budget / 1000)}k characters, so it is split by trace` : ""}) — this can take a while.`,
     "info",
   );
 
@@ -458,6 +475,10 @@ async function scanOne(
   let lastVerdict = "";
 
   for (const group of plan.groups) {
+    if (signal.aborted) {
+      failures.push("cancelled before this trace was sent");
+      break;
+    }
     const run = await runEvaluation({
       sdk: pi.pi,
       paths,
@@ -530,12 +551,12 @@ async function scanOne(
 
 /** A trace nobody can send: named by size, left eligible, never truncated. */
 function oversizedNotice(
-  session: SessionCandidate,
+  sessionId: string,
   oversized: Array<{ traceId: string; chars: number }>,
   budgetChars: number,
 ): string {
   const named = oversized.map(entry => `${entry.traceId} (${Math.round(entry.chars / 1000)}k chars)`).join(", ");
-  return `${session.sessionId}: ${oversized.length} trace(s) exceed what the evaluator's model can take (${Math.round(budgetChars / 1000)}k characters): ${named}`;
+  return `${sessionId}: ${oversized.length} trace(s) exceed what the evaluator's model can take (${Math.round(budgetChars / 1000)}k characters) — ${named}`;
 }
 
 async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {

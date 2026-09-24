@@ -417,6 +417,67 @@ describe("the distill command", () => {
     expect(new Set(evaluations.flatMap(record => (record.kind === "evaluation" ? record.traceSessionIds : []))).size).toBe(2);
   });
 
+  test("one unsendable trace never starves the traces that fit, and a retry pays only for what is open", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const paths = distillPaths(project);
+    await setupProject(project);
+
+    // Rendered records cap at 4k characters each, so a trace that does not fit is a trace with
+    // many records: the worker's 8 against the parent's 2, past the fake model's 20k budget.
+    const small = "the operator corrected the retry backoff, and the correction stuck. ".repeat(70);
+    const workerBody = "the worker pasted another slice of the runner log into its own transcript. ".repeat(70);
+    const workerLines = Array.from({ length: 8 }, (_unused, index) => {
+      const id = `6100000${index}`;
+      const parentId = index === 0 ? null : `6100000${index - 1}`;
+      return index % 2 === 0
+        ? userMessage({ id, parentId }, workerBody)
+        : assistantMessage({ id, parentId }, [textPart(workerBody)]);
+    });
+    await writeSessionFixture({
+      dir: sessionDir,
+      sessionId: SESSION_ID,
+      cwd: project,
+      lines: [
+        userMessage({ id: RECORD_ID, parentId: null }, small),
+        assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart(small)]),
+      ],
+      subagents: [
+        {
+          name: "Worker",
+          sessionId: "aaaa1111-4444-7000-8000-000000000062",
+          lines: workerLines,
+        },
+      ],
+    });
+
+    const { api, commands, created } = harness({ evaluate: true, agentDir });
+    distillExtension(api);
+    const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir, models: [{ provider: "deepseek", id: "tiny", name: "Tiny", contextWindow: 1 }] });
+
+    const first = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+
+    // The fitting trace was evaluated; the unsendable one was named and left alone.
+    expect(created).toHaveLength(1);
+    expect(first).toContain("exceed what the evaluator's model can take");
+    expect(first).toContain("the other 1 trace(s) are evaluated now");
+    expect(first).toContain("1 lesson(s) proposed");
+
+    const ledger = await readLedger(paths);
+    const evaluations = ledger.filter(record => record.kind === "evaluation");
+    expect(evaluations).toHaveLength(2);
+    // The unsendable trace is recorded first, then the runs that did happen.
+    expect(evaluations.map(record => (record.kind === "evaluation" ? record.outcome : ""))).toEqual(["failed", "lessons"]);
+    const failed = evaluations.find(record => record.kind === "evaluation" && record.outcome === "failed");
+    expect(failed?.kind === "evaluation" ? failed.traceSessionIds : []).toEqual(["aaaa1111-4444-7000-8000-000000000062"]);
+
+    // The parent trace is retired now, so a second scan sends nothing for it: it stops at the
+    // trace that still does not fit rather than re-paying for the one already covered.
+    const before = created.length;
+    const second = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+    expect(created).toHaveLength(before);
+    expect(second).toContain("nothing can be sent for them");
+  });
+
   test("a dry run prints the payload and writes nothing", async () => {
     const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);

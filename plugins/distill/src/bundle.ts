@@ -11,8 +11,12 @@ import { buildBundle, renderPayload, type TraceBundle, type TraceRenderOptions }
 export interface EvaluationPlan {
   /** One bundle per evaluator run: the whole session when it fits, else one trace each. */
   groups: TraceBundle[];
-  /** Traces that fit nowhere: they fail loudly and stay eligible rather than being truncated. */
-  oversized: Array<{ traceId: string; chars: number }>;
+  /**
+   * Traces that fit nowhere: they fail loudly and stay eligible rather than being truncated.
+   * Both ids are carried — `traceId` is what a payload prints, `sessionId` is what the ledger
+   * and retirement speak.
+   */
+  oversized: Array<{ traceId: string; sessionId: string; chars: number }>;
 }
 
 /**
@@ -28,14 +32,31 @@ export function planEvaluations(
 ): EvaluationPlan {
   if (renderPayload(bundle, options).length <= budgetChars) return { groups: [bundle], oversized: [] };
 
+  // The payload is additive — one header, then each trace's records — so a greedy pack over the
+  // traces needs each trace's own size and the header's, and nothing else. Packing matters: a
+  // bundle 12% over the budget should cost two runs, not one per trace.
+  const headerChars = renderPayload({ ...bundle, traces: [] }, options).length;
+  const oversized: Array<{ traceId: string; sessionId: string; chars: number }> = [];
   const groups: TraceBundle[] = [];
-  const oversized: Array<{ traceId: string; chars: number }> = [];
+  let current: TraceBundle["traces"] = [];
+  let used = headerChars;
+
   for (const trace of bundle.traces) {
-    const single: TraceBundle = { ...bundle, traces: [trace] };
-    const chars = renderPayload(single, options).length;
-    if (chars <= budgetChars) groups.push(single);
-    else oversized.push({ traceId: trace.id, chars });
+    const chars = renderPayload({ ...bundle, traces: [trace] }, options).length;
+    const body = chars - headerChars;
+    if (chars > budgetChars) {
+      oversized.push({ traceId: trace.id, sessionId: trace.sessionId, chars });
+      continue;
+    }
+    if (used + body > budgetChars && current.length > 0) {
+      groups.push({ ...bundle, traces: current });
+      current = [];
+      used = headerChars;
+    }
+    current.push(trace);
+    used += body;
   }
+  if (current.length > 0) groups.push({ ...bundle, traces: current });
   return { groups, oversized };
 }
 

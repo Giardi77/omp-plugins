@@ -275,6 +275,29 @@ describe("a run", () => {
     expect(fake.disposedCount()).toBe(1);
   });
 
+  test("a scan cancelled before a run starts pays for nothing", async () => {
+    const { paths, bundle } = await fixtureBundle();
+    const fake = scriptedSdk({ calls: [{ params: { verdict: "should never run", lessons: [] } }] });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runEvaluation({
+      sdk: fake.sdk,
+      paths,
+      config: DEFAULT_CONFIG,
+      bundle,
+      payload: "payload",
+      evaluatorPrompt: "# taste",
+      modelRegistry: {} as never,
+      signal: controller.signal,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("cancelled");
+    expect(fake.created).toEqual([]);
+    expect(fake.prompted).toEqual([]);
+  });
+
   test("a deadline that ends the run without a throw is still a timeout", async () => {
     // The host ends a deadline-exceeded stream gracefully, so the run reaches waitForIdle and
     // simply never calls the tool; the elapsed deadline is what makes it a timeout (D14).

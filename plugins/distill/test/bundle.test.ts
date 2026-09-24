@@ -94,6 +94,11 @@ describe("trace bundles", () => {
     expect(tight.groups[0]?.traces[0]?.sessionId).toBe("11112222-6666-7000-8000-000000000073");
     expect(tight.oversized).toEqual([]);
 
+    // Two traces that fit together share a run: the split costs the fewest runs the budget allows.
+    const pair = planEvaluations(result.bundle, 9_000, options);
+    expect(pair.groups).toHaveLength(1);
+    expect(pair.groups[0]?.traces).toHaveLength(2);
+
     // A single trace past the budget fits nowhere: named, never truncated.
     const squeezed = planEvaluations(result.bundle, 1_000, options);
     expect(squeezed.groups).toEqual([]);

@@ -42,8 +42,12 @@ and a `tmp/` ignore rule. Then:
 and calls no model, and `/distill scan --session <id>` evaluates one session without choosing.
 Scans are serialized: two cannot run at once in one project.
 
-A session whose whole bundle is larger than the evaluator's model can take is evaluated one trace
-at a time — the parent first, then each subagent — so a 3 MB transcript still yields lessons instead
+The payload is a digest, not a transcript dump: prompts, assistant text and tool calls in full (capped
+per record), tool results as their first line plus size, and each trace's transcript path so the
+evaluator can read any record itself. Cited evidence is still extracted verbatim from the record.
+
+A session whose whole bundle is larger than the evaluator's model can take is evaluated in as few runs
+as the budget allows — the parent first, then each subagent — so a 3 MB transcript still yields lessons instead
 of a 400 error. Nothing is ever truncated: a single trace that still does not fit fails loudly,
 names its size, and stays eligible for a retry. A run that fails reports what the provider said
 (`the evaluator's model call failed: …`), and its dump under `tmp/` carries the same reason.

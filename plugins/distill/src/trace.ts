@@ -15,9 +15,17 @@ import { isRecord } from "./util";
 
 export const MAX_TEXT_CHARS = 4_000;
 export const MAX_ARGUMENT_CHARS = 2_000;
-export const MAX_OUTPUT_CHARS = 4_000;
 export const MAX_THINKING_CHARS = 2_000;
 export const MAX_EXCERPT_CHARS = 1_200;
+export const MAX_INJECTED_CHARS = 1_500;
+/**
+ * Tool output is summarised in the payload, not quoted: results are over half a real session's
+ * bytes, and the evaluator has `read`/`grep` and each trace's transcript path, so it can open
+ * the record when the detail matters. Errors keep more of their first line than successes,
+ * because a refusal or a failure is the signal a lesson is built on.
+ */
+export const MAX_RESULT_LINE_CHARS = 240;
+export const MAX_ERROR_LINE_CHARS = 600;
 
 export interface Trace {
   /** Short, stable id used in citations: `<traceId>:<recordId>`. */
@@ -133,6 +141,7 @@ export function renderPayload(bundle: TraceBundle, options: TraceRenderOptions):
   for (const trace of bundle.traces) {
     lines.push(`## trace ${trace.id} — ${trace.label}`);
     lines.push(`session ${trace.sessionId}, ${trace.records.length} records`);
+    lines.push(`file ${trace.sessionFile}`);
     lines.push("");
     for (const record of trace.records) {
       for (const line of renderRecord(record, options)) lines.push(`[${record.id}] ${line}`);
@@ -144,15 +153,15 @@ export function renderPayload(bundle: TraceBundle, options: TraceRenderOptions):
 }
 
 /** The record's own text, as the evaluator sees it: no record id, capped per part. */
-export function renderRecord(entry: SessionEntry, options: TraceRenderOptions): string[] {
+export function renderRecord(entry: SessionEntry, options: TraceRenderOptions, elideResults = true): string[] {
   switch (entry.type) {
     case "message": {
       const message = readMessage(entry.message);
-      return message ? renderMessage(message, options) : [];
+      return message ? renderMessage(message, options, elideResults) : [];
     }
     case "custom_message": {
       const attribution = typeof entry.attribution === "string" ? ` (${entry.attribution})` : "";
-      return [`injected ${entry.customType}${attribution}: ${capText(contentText(entry.content), MAX_TEXT_CHARS)}`];
+      return [`injected ${entry.customType}${attribution}: ${capText(contentText(entry.content), MAX_INJECTED_CHARS)}`];
     }
     case "model_change":
       return [`model: ${entry.model}`];
@@ -169,13 +178,18 @@ export function renderRecord(entry: SessionEntry, options: TraceRenderOptions): 
 
 /** Verbatim evidence for one cited record; the plugin extracts it, never the model (D12). */
 export function excerptFor(entry: SessionEntry, options: TraceRenderOptions = { includeThinking: true }): string {
-  return capText(renderRecord(entry, options).join("\n"), MAX_EXCERPT_CHARS);
+  return capText(renderRecord(entry, options, false).join("\n"), MAX_EXCERPT_CHARS);
 }
 
-function renderMessage(message: MessageView, options: TraceRenderOptions): string[] {
+function renderMessage(message: MessageView, options: TraceRenderOptions, elideResults: boolean): string[] {
   if (message.role === "toolResult") {
     const flag = message.isError ? " error" : "";
-    return [`toolResult ${message.toolName ?? "tool"}${flag}: ${capText(contentText(message.parts), MAX_OUTPUT_CHARS)}`];
+    const name = message.toolName ?? "tool";
+    const content = contentText(message.parts);
+    if (!elideResults) return [`toolResult ${name}${flag}: ${capText(content, MAX_EXCERPT_CHARS)}`];
+    const line = capText(content, message.isError ? MAX_ERROR_LINE_CHARS : MAX_RESULT_LINE_CHARS);
+    const elided = content.length > line.length ? ` — ${content.length} chars in full, read the trace file for it` : "";
+    return [`toolResult ${name}${flag}: ${line}${elided}`];
   }
 
   if (message.role === "user") {

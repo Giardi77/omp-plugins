@@ -105,6 +105,42 @@ describe("payload rendering", () => {
     expect(payload).not.toContain("Cite a record");
   });
 
+  test("tool results are summarised in the payload and quoted only as evidence", async () => {
+    const { cwd, sessionPath, session } = await awkwardSession();
+    const bundle = buildBundle({
+      projectRoot: cwd,
+      sessionId: session.header.id,
+      sessionFile: sessionPath,
+      parent: resolveBranch(session.entries),
+      subagents: [],
+    });
+    bundle.traces[0]?.records.push(
+      ...entriesOf([
+        assistantMessage({ id: "1000000f", parentId: "1000000e" }, [toolCallPart("call_3", "bash", { command: "ls" })]),
+        toolResultMessage({ id: "10000010", parentId: "1000000f" }, {
+          toolCallId: "call_3",
+          toolName: "bash",
+          text: `${"a-listed-file-with-a-rather-long-name\n".repeat(40)}tail of the listing`,
+        }),
+      ]),
+    );
+
+    const payload = renderPayload(bundle, { includeThinking: false });
+    // The gist and the size, not the output; the transcript path makes the rest reachable.
+    expect(payload).toContain("[10000010] toolResult bash: a-listed-file-with-a-rather-long-name");
+    expect(payload).toMatch(/\[10000010\] toolResult bash: [\s\S]*chars in full, read the trace file for it/);
+    expect(payload).not.toContain("tail of the listing");
+    expect(payload).toContain(`file ${sessionPath}`);
+
+    // Evidence keeps the content: the cited record is what an approved lesson rests on.
+    const result = resolveBranch(session.entries).find(entry => entry.id === "1000000a");
+    expect(result).toBeDefined();
+    if (!result) return;
+    expect(excerptFor(result)).toBe(
+      'toolResult edit error: Tool "edit" is blocked by user policy.\nTo allow: remove "tools.approval.edit: deny" from config.',
+    );
+  });
+
   test("reasoning text is opt-in", async () => {
     const { cwd, sessionPath, session } = await awkwardSession();
     const bundle = buildBundle({

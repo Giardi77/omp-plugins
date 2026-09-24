@@ -22,6 +22,15 @@ deadline, while a tool call's arguments are validated before the turn ends and a
 tool error the model can fix inside the same run; two submission fields, trace and record — rejected in
 favour of one qualified id printed in the render, so the value the model reads is the value it cites.
 
+**Amended 2026-09-24 (payload digest)**: a real session showed what the payload's bytes are made of —
+tool results 55%, assistant text 33%, injected messages 9%, prompts 2% — and quoting tool output was
+flooding the evaluator with material it can fetch itself, since these two tools are exactly what it
+holds. The payload now names each trace's transcript file and summarises tool results to their first
+line and size (errors keep more of that line than successes, because a refusal is the signal). The
+tool description says where the detail is. The *evidence* path is unchanged: a cited record's excerpt
+is still extracted from the full record, so a lesson rests on what actually happened. On the session
+that motivated it the payload fell from 3.7 M to 2.0 M characters.
+
 **Consequences**: with built-ins, nothing intercepts file access, so the per-evaluation read log is not
 obtainable from the tools — the evaluator's own transcript is the only place it could be
 reconstructed. The mechanical instructions — call this tool once, cite records, consult the lessons
