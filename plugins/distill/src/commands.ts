@@ -15,17 +15,19 @@ import {
 import { ANSWER_CONTRACT_VERSION } from "./contract";
 import { runEvaluation, type EvaluatorModel } from "./evaluator";
 import {
+  acquireScanLock,
   buildScanJob,
   cancelRequestPath,
   cancelScanJob,
   clearCancelRequest,
   describeScanJob,
-  readScanDaemon,
   readScanJob,
   scanJobPath,
+  scanLockHeld,
   startScanJob,
   writeScanJob,
   type ScanJob,
+  type ScanTarget,
 } from "./job";
 import {
   appendLedger,
@@ -325,7 +327,11 @@ async function runStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths: 
     agentDir: pi.pi.getAgentDir(),
     sessionDir: ctx.sessionManager.getSessionDir(),
   });
-  const scan = describeScanJob(await readScanJob(paths), await readScanDaemon(paths));
+  const job = await readScanJob(paths);
+  const scan = describeScanJob(job, {
+    running: await scanLockHeld(paths),
+    pidAlive: job?.pid !== undefined && processAlive(job.pid),
+  });
   notify(ctx, renderStatus(await collectStatus(paths, config, discovery), scan), "info");
 }
 
@@ -393,7 +399,7 @@ async function runScan(
   // A fresh scan never inherits a cancel request aimed at the last one.
   await clearCancelRequest(paths);
 
-  const job = buildScanJob(selection.map(session => ({ sessionId: session.sessionId, title: session.title })));
+  const job = buildScanJob(selection);
   const started = await startScanJob(paths, job);
   if (!started.ok) {
     notify(
@@ -462,27 +468,16 @@ async function runScanJob(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths:
     }, 500);
 
     try {
-      const discovery = await listProjectSessions({
-        cwd: paths.projectRoot,
-        agentDir: pi.pi.getAgentDir(),
-        sessionDir: ctx.sessionManager.getSessionDir(),
-      });
       const retired = await retiredTraceSessionIds(paths);
 
       for (const entry of job.sessions) {
         if (cancellation.signal.aborted) break;
-        const candidate = discovery.sessions.find(session => session.sessionId === entry.sessionId);
-        if (candidate === undefined) {
-          entry.status = "failed";
-          entry.reason = "the session is no longer in this project's store";
-          job.errors.push(`${entry.sessionId}: ${entry.reason}`);
-          await writeScanJob(paths, job);
-          continue;
-        }
+        // The journal carries the session — id, path, title, start time — so the runner reads its
+        // own handoff instead of asking the store again under its own environment.
         entry.status = "running";
         await writeScanJob(paths, job);
 
-        const outcome = await scanOne(pi, ctx, paths, config, evaluator, candidate, headless, model, cancellation.signal, retired);
+        const outcome = await scanOne(pi, ctx, paths, config, evaluator, entry, headless, model, cancellation.signal, retired);
         if (cancellation.signal.aborted) {
           // A cancelled session is not a covered one. Its ledger row already says the run failed, so
           // its traces stay eligible — the journal has to say the same, or the count reads as work
@@ -513,6 +508,17 @@ async function runScanJob(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths:
   }
 }
 
+/** Existence, not identity: used only for the seconds between a spawn and the lock it takes. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists and belongs to someone else; ESRCH means it is gone.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** A runner that cannot start at all still has to leave the journal honest. */
 async function finishScanJob(
   paths: DistillPaths,
@@ -540,7 +546,7 @@ async function scanOne(
   paths: DistillPaths,
   config: DistillConfig,
   evaluator: { text: string; sha256: string },
-  session: SessionCandidate,
+  session: ScanTarget,
   flags: DistillFlags,
   model: ResolvedModel,
   signal: AbortSignal,
@@ -904,7 +910,7 @@ async function selectSessions(
   return eligible.slice(0, limit);
 }
 
-function describeSession(session: SessionCandidate): string {
+function describeSession(session: { created: string; title: string }): string {
   const title = session.title.trim() === "" ? "(untitled)" : session.title.trim();
   return `${session.created.slice(0, 16).replace("T", " ")} ${title}`;
 }
@@ -927,25 +933,12 @@ async function hashFile(filePath: string): Promise<string | undefined> {
   }
 }
 
-/** One scan at a time, across processes: the scan lock is distinct from the store lock. */
-async function acquireScanLock(
-  paths: DistillPaths,
-  options: { retries?: number; retryDelayMs?: number } = {},
-): Promise<FileLockHandle | undefined> {
-  await fs.mkdir(paths.locksDir, { recursive: true });
-  try {
-    return await acquireFileLock(path.join(paths.locksDir, "scan"), { retries: 1, ...options });
-  } catch {
-    return undefined;
-  }
-}
-
 const MAX_DUMPED_PAYLOAD_CHARS = 100_000;
 
 /** The failure dump `tmp/` exists for: what the evaluator was sent when a run failed loudly. */
 async function writeFailureDump(
   paths: DistillPaths,
-  session: SessionCandidate,
+  session: ScanTarget,
   reason: string,
   payload: string,
   reads: string[],

@@ -7,13 +7,7 @@ import { distillPaths, setupProject } from "../src/config";
 import { EVALUATOR_TOOL_NAMES, type EvaluatorTool } from "../src/evaluator";
 import distillExtension from "../src/index";
 import { evaluationRecord, listLessons, readLedger } from "../src/lessons";
-import {
-  __setScanBrokerForTests,
-  readScanJob,
-  SCAN_DAEMON_NAME,
-  type ScanBroker,
-  type ScanDaemonSpec,
-} from "../src/job";
+import { __setScanSpawnForTests, readScanJob, type ScanSpawnPlan } from "../src/job";
 import { resolveStore } from "../src/store";
 import { isRecord } from "../src/util";
 import { assistantMessage, makeTempDir, textPart, userMessage, writeSessionFixture } from "./fixtures";
@@ -22,30 +16,16 @@ const SESSION_ID = "aaaa1111-2222-7000-8000-000000000060";
 const RECORD_ID = "50000001";
 
 /**
- * A stand-in for the host's daemon broker. The real one would spawn an `omp -p "/distill _job"`
- * process in `~/.omp/run`, which a test must never do — it would leave a daemon behind on the
- * machine running the suite.
+ * A stand-in for the spawn: the real one starts an `omp -p "/distill _job"` process, which a test
+ * must never do — it would leave a scan running on the machine running the suite.
  */
-function fakeBroker(): { broker: ScanBroker; specs: ScanDaemonSpec[]; end: () => void } {
-  const specs: ScanDaemonSpec[] = [];
-  let alive = false;
+function fakeSpawn(): { spawn: (plan: ScanSpawnPlan) => Promise<{ pid?: number }>; plans: ScanSpawnPlan[] } {
+  const plans: ScanSpawnPlan[] = [];
   return {
-    specs,
-    end: () => {
-      alive = false;
-    },
-    broker: {
-      start: async spec => {
-        specs.push(spec);
-        alive = true;
-        return { pid: 4242 };
-      },
-      list: async () => [{ name: SCAN_DAEMON_NAME, state: alive ? "running" : "exited", pid: 4242 }],
-      waitForExit: async () => true,
-      stop: async () => {
-        alive = false;
-        return true;
-      },
+    plans,
+    spawn: async plan => {
+      plans.push(plan);
+      return { pid: 4242 };
     },
   };
 }
@@ -65,8 +45,8 @@ interface Harness {
   labels: string[];
   /** Every evaluator session the scan asked for, in order. */
   created: CreateAgentSessionOptions[];
-  /** The broker the scan command would otherwise reach. */
-  scan: { specs: ScanDaemonSpec[]; end: () => void };
+  /** The spawn the scan command would otherwise perform. */
+  scan: { plans: ScanSpawnPlan[] };
 }
 
 function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harness {
@@ -75,8 +55,8 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
   const labels: string[] = [];
   const created: CreateAgentSessionOptions[] = [];
 
-  const scan = fakeBroker();
-  __setScanBrokerForTests(scan.broker);
+  const scan = fakeSpawn();
+  __setScanSpawnForTests(scan.spawn);
 
   const pi = {
     setLabel: (label: string) => labels.push(label),
@@ -115,7 +95,7 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
     },
   };
 
-  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created, scan: { specs: scan.specs, end: scan.end } };
+  return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created, scan: { plans: scan.plans } };
 }
 
 /**
@@ -223,7 +203,7 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 
 afterEach(() => {
   lastPayload = "";
-  __setScanBrokerForTests(undefined);
+  __setScanSpawnForTests(undefined);
 });
 
 async function projectWithSession(): Promise<{ project: string; sessionDir: string; agentDir: string }> {
@@ -396,17 +376,13 @@ describe("the distill command", () => {
       await commands.distill!.handler("_job", ctx);
     });
 
-    expect(scan.specs).toHaveLength(1);
-    expect(scan.specs[0]).toMatchObject({
-      name: SCAN_DAEMON_NAME,
-      args: ["-p", "/distill _job"],
-      cwd: project,
-      detached: true,
-      persist: true,
-      restart: "no",
-      pty: false,
-    });
-    expect(scan.specs[0]?.application).toContain("omp");
+    expect(scan.plans).toHaveLength(1);
+    // The plan is the contract with the spawner; that the child is detached and unref'd is proven
+    // live (a scan that outlives the process which started it), not here.
+    expect(scan.plans[0]?.command.slice(1)).toEqual(["-p", "/distill _job"]);
+    expect(scan.plans[0]?.command[0]).toContain("omp");
+    expect(scan.plans[0]?.cwd).toBe(project);
+    expect(scan.plans[0]?.logPath).toContain(".omp/distill/tmp/scan.log");
     expect(output).toContain("Scan started in the background");
     expect(await readScanJob(paths)).toMatchObject({ status: "finished", lessons: 1, errors: [] });
     expect(output).toContain("1 lesson(s) proposed");
@@ -581,6 +557,27 @@ describe("the distill command", () => {
 
     const again = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
     expect(again).toContain("No unevaluated sessions");
+  });
+
+  test("a broker that will not start a daemon still gets its scan run here, and says so", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const paths = distillPaths(project);
+    await setupProject(project);
+
+    const { api, commands } = harness({ evaluate: true, agentDir });
+    distillExtension(api);
+    // The broker unreachable is not the operator's problem to solve: the scan runs where it is.
+    __setScanSpawnForTests(async () => {
+      throw new Error("spawn ENOENT");
+    });
+
+    const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
+    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+
+    expect(output).toContain("No background scan here (spawn ENOENT)");
+    expect(output).toContain("1 lesson(s) proposed");
+    expect(await readScanJob(paths)).toMatchObject({ status: "finished", lessons: 1, errors: [] });
+    expect(await listLessons(paths)).toHaveLength(1);
   });
 
   test("review in a session without a window reports where the lessons wait", async () => {

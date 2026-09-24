@@ -22,6 +22,12 @@ status` reads the journal for progress and the broker for liveness; `/distill ca
 cancel request the runner already polls, and escalates to the broker's `stop` only when the runner
 will not go.
 
+**One runner per scan, and nothing resident.** There is no idle process, no IPC, no daemon of our
+own to start, own, or shut down: a scan spawns a runner, the runner exits when its scan does, and the
+broker's record for it is a process rather than a service. A resident supervisor would buy nothing —
+scans are operator-initiated and minutes long — and would raise the one question this design does not
+have: when two OMP instances want one.
+
 Deliberate consequences:
 
 - **OMP exiting no longer ends a scan.** Verified by killing the parent 400 ms after it handed off:
@@ -32,9 +38,13 @@ Deliberate consequences:
 - **A fallback, not a fork.** When the `omp` binary or the broker is unavailable, the same runner
   runs inside the operator's session, with the same journal — `/distill status` then reports a scan
   whose journal exists and whose daemon does not.
-- **Two truths, on purpose.** Liveness comes from the broker and progress from the journal, because
-  a pid file of our own would have to answer "is it still alive" with a signal probe, and a journal
-  read by the broker's supervisor would tell it nothing it needs.
+- **Liveness is the scan lock, not a pid.** `/distill status` asks the only question that cannot
+  lie — can I take the lock? — and gives it straight back: held means a scan is running, free means
+  nothing is, whatever the files claim (a pid file would be wrong on reuse and wrong forever after a
+  SIGKILL). The broker fills in what the lock cannot say: the pid, and the few seconds between the
+  spawn and the runner taking the lock. The journal supplies everything else — progress, and the
+  session it is on, path and all, so the runner never has to resolve the store again under its own
+  environment.
 
 **Considered Options**: keep the scan in-process and document the loss — rejected by the operator,
 and the loss is the most expensive thing the plugin does; spawn a detached child ourselves with a pid

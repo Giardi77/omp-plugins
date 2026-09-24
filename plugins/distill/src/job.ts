@@ -1,56 +1,51 @@
 /**
- * A scan is a background daemon.
+ * A scan is a background process.
  *
- * `/distill scan` resolves what to evaluate, writes that list as a journal, and hands it to the
- * host's own daemon broker (`@oh-my-pi/pi-coding-agent/launch/client`). The broker starts a
- * detached `omp -p "/distill _job"`, keeps it alive after the OMP that started it is gone, captures
- * its output, and lists it in `omp ps`. A pid file, a log file and a supervision loop of our own
- * would only re-implement the broker (ADR-0014).
+ * `/distill scan` resolves what to evaluate, writes that list as a journal, and spawns a detached
+ * `omp -p "/distill _job"` that outlives the OMP which started it. The runner takes the scan lock,
+ * walks the journal, and updates it after every session.
  *
- * Division of truth: the broker owns liveness (is the runner still there), the journal
- * (`tmp/scan.json`, written by the runner) owns progress — which session it is on, how many lessons
- * it has proposed. `/distill status` reads both.
+ * The host has a daemon broker that would do the spawning, and it was the first implementation —
+ * until the installed layout proved it unreachable: from a marketplace-installed plugin the
+ * `@oh-my-pi/pi-coding-agent/launch/client` subpath does not resolve and the package root does not
+ * export it, the same wall ADR-0011 recorded for two other host subpaths. A detached spawn is
+ * `Bun.spawn({ detached: true })` plus `unref()`, which is all the broker gave us here, so the
+ * plugin owns those forty lines instead of a dependency that only works from the repo (ADR-0014).
+ *
+ * Division of truth: the **scan lock** says whether a scan is running — an OS lease, released when
+ * its process dies, which is the one thing a pid file can never promise — and the journal says what
+ * it has done. `/distill status` reads both.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
+import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils";
 import type { DistillPaths } from "./config";
 
-export const SCAN_DAEMON_NAME = "distill-scan";
-/** How long `/distill cancel` lets the runner stop by itself before the broker kills it. */
+let spawnerOverride: ScanSpawner | undefined;
+/** How long `/distill cancel` lets the runner stop by itself before it is killed. */
 export const CANCEL_GRACE_MS = 10_000;
-
-/** Daemon lifecycle states the broker reports (see pi-tui's launch types). */
-export type DaemonState = "starting" | "running" | "ready" | "restarting" | "stopping" | "exited" | "failed";
-
-export interface ScanDaemonRecord {
-  name: string;
-  state: DaemonState | string;
-  pid?: number;
-  exitCode?: number;
-  exitReason?: string;
-  outputBytes?: number;
-}
-
-/** The immutable launch spec the host's broker starts (its `DaemonSpec`). */
-export interface ScanDaemonSpec {
-  name: string;
-  application: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd: string;
-  pty: boolean;
-  restart: string;
-  persist: boolean;
-  detached: boolean;
-}
 
 export type ScanJobStatus = "starting" | "running" | "finished" | "failed" | "cancelled";
 export type ScanSessionStatus = "pending" | "running" | "done" | "failed";
 
-export interface ScanJobSession {
+/**
+ * What a scan needs to know about a session — carried in the journal rather than looked up again.
+ * The runner boots in its own process, possibly minutes later, under its own environment: re-listing
+ * the store there would make the handoff depend on both processes resolving the same agent directory,
+ * and a store that disagrees by one directory reads as "the session is gone".
+ */
+export interface ScanTarget {
   sessionId: string;
+  /** The session's transcript file, the same one the scan read its traces from. */
+  path: string;
   title: string;
+  /** The session's start time, as its header records it. */
+  created: string;
+}
+
+export interface ScanJobSession extends ScanTarget {
   status: ScanSessionStatus;
   lessons?: number;
   verdict?: string;
@@ -61,8 +56,8 @@ export interface ScanJob {
   status: ScanJobStatus;
   startedAt: string;
   endedAt?: string;
-  /** The runner's process, written by the runner itself: the daemon path is covered by the broker's
-   * snapshot, and this is what keeps an in-process scan from reading as "interrupted". */
+  /** The runner's process, written by the runner itself; the broker knows its own pid, and this is
+   * the pid for a scan running inside the operator's session. */
   pid?: number;
   sessions: ScanJobSession[];
   lessons: number;
@@ -72,13 +67,14 @@ export interface ScanJob {
 export type ScanJobStart = { ok: true; pid?: number } | { ok: false; reason: string };
 export type ScanCancelOutcome = "idle" | "cancelled" | "stopped" | "unreachable";
 
-/** The four broker calls this plugin makes, so the wire protocol stays in one adapter. */
-export interface ScanBroker {
-  start(spec: ScanDaemonSpec): Promise<{ pid?: number }>;
-  list(): Promise<ScanDaemonRecord[]>;
-  waitForExit(name: string, timeoutMs: number): Promise<boolean>;
-  stop(name: string, timeoutMs: number): Promise<boolean>;
+/** How the runner is started, so a test can watch the plan without spawning a process. */
+export interface ScanSpawnPlan {
+  command: string[];
+  cwd: string;
+  logPath: string;
 }
+
+export type ScanSpawner = (plan: ScanSpawnPlan) => Promise<{ pid?: number }>;
 
 export function scanJobPath(paths: DistillPaths): string {
   return path.join(paths.tmpDir, "scan.json");
@@ -90,11 +86,17 @@ export function cancelRequestPath(paths: DistillPaths): string {
 }
 
 /** What `/distill scan` hands the runner: the sessions it resolved, in the order to take them. */
-export function buildScanJob(selection: ReadonlyArray<{ sessionId: string; title: string }>, now = new Date()): ScanJob {
+export function buildScanJob(selection: readonly ScanTarget[], now = new Date()): ScanJob {
   return {
     status: "starting",
     startedAt: now.toISOString(),
-    sessions: selection.map(session => ({ sessionId: session.sessionId, title: session.title, status: "pending" })),
+    sessions: selection.map(session => ({
+      sessionId: session.sessionId,
+      path: session.path,
+      title: session.title,
+      created: session.created,
+      status: "pending",
+    })),
     lessons: 0,
     errors: [],
   };
@@ -128,8 +130,12 @@ export async function clearCancelRequest(paths: DistillPaths): Promise<void> {
   await fs.rm(cancelRequestPath(paths), { force: true });
 }
 
-export function daemonAlive(daemon: ScanDaemonRecord | undefined): boolean {
-  return daemon !== undefined && daemon.state !== "exited" && daemon.state !== "failed";
+/**
+ * The runner's log: its notices, and whatever the provider says when a run fails. One name, not one
+ * per scan — a scan at a time means the current log is the last scan's, and a path anyone can find.
+ */
+export function scanLogPath(paths: DistillPaths): string {
+  return path.join(paths.tmpDir, "scan.log");
 }
 
 export async function startScanJob(paths: DistillPaths, job: ScanJob): Promise<ScanJobStart> {
@@ -138,106 +144,149 @@ export async function startScanJob(paths: DistillPaths, job: ScanJob): Promise<S
   await writeScanJob(paths, job);
   const runtime = Bun.which("omp");
   if (!runtime) return { ok: false, reason: "the omp executable is not on PATH" };
-  const broker = await scanBroker(paths);
-  if (!broker) return { ok: false, reason: "the host's daemon broker is unavailable in this session" };
+  const logPath = scanLogPath(paths);
   try {
-    const started = await broker.start({
-      name: SCAN_DAEMON_NAME,
-      application: runtime,
-      // A command-only print run: no TUI, no session in the store, and it exits when the scan does.
-      args: ["-p", "/distill _job"],
-      env: {},
+    // A command-only print run: no TUI, no session in the store, and it exits when the scan does.
+    const spawned = await (spawnerOverride ?? spawnDetached)({
+      command: [runtime, "-p", "/distill _job"],
       cwd: paths.projectRoot,
-      pty: false,
-      restart: "no",
-      persist: true,
-      detached: true,
+      logPath,
     });
-    return started.pid === undefined ? { ok: true } : { ok: true, pid: started.pid };
+    if (spawned.pid !== undefined) {
+      // The runner overwrites this with its own pid when it takes the lock; written here so a spawn
+      // that dies before the lock is distinguishable from one that never happened.
+      job.pid = spawned.pid;
+      await writeScanJob(paths, job);
+    }
+    return spawned.pid === undefined ? { ok: true } : { ok: true, pid: spawned.pid };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export async function readScanDaemon(paths: DistillPaths): Promise<ScanDaemonRecord | undefined> {
-  const broker = await scanBroker(paths);
-  if (!broker) return undefined;
+/** Detached and unref'd: the child gets its own process group and outlives this process. */
+async function spawnDetached(plan: ScanSpawnPlan): Promise<{ pid?: number }> {
+  const log = await fs.open(plan.logPath, "w");
   try {
-    return (await broker.list()).find(record => record.name === SCAN_DAEMON_NAME);
-  } catch {
-    // A broker that cannot be reached is not the status command's problem to report twice.
-    return undefined;
-  }
-}
-
-export async function cancelScanJob(paths: DistillPaths, graceMs = CANCEL_GRACE_MS): Promise<ScanCancelOutcome> {
-  const daemon = await readScanDaemon(paths);
-  const job = await readScanJob(paths);
-  if (daemon !== undefined && !daemonAlive(daemon)) return "idle";
-  // No daemon and no running journal: nothing to cancel, and nothing to write.
-  if (daemon === undefined && (job === undefined || (job.status !== "running" && job.status !== "starting"))) {
-    return "idle";
-  }
-
-  // Graceful first: the runner notices within a poll interval, aborts the evaluation in flight and
-  // keeps everything it has already recorded. A scan running in the operator's own session (the
-  // fallback, and the daemon's own process) stops exactly the same way.
-  await requestScanCancel(paths);
-  const broker = daemon === undefined ? undefined : await scanBroker(paths);
-  if (broker === undefined) return "cancelled";
-  try {
-    if (await broker.waitForExit(SCAN_DAEMON_NAME, graceMs)) return "cancelled";
-    return (await broker.stop(SCAN_DAEMON_NAME, 5_000)) ? "stopped" : "unreachable";
-  } catch {
-    return "cancelled";
+    const child = Bun.spawn(plan.command, {
+      cwd: plan.cwd,
+      stdin: "ignore",
+      stdout: log.fd,
+      stderr: log.fd,
+      detached: true,
+    });
+    child.unref();
+    return child.pid === undefined ? {} : { pid: child.pid };
+  } finally {
+    // The child holds its own copy of the descriptor.
+    await log.close();
   }
 }
 
 /**
- * The one line `/distill status` adds about scanning. Both halves are optional: the journal can
- * exist without a broker (an in-process scan) and a daemon record can exist without a journal
- * (a runner that died before it published one), and each case still has something honest to say.
+ * Whether a scan holds the project's lock, asked the only way that cannot lie: acquire it, and give
+ * it straight back. A held lock means a scan is running — a pid file would answer the same question
+ * with a stale pid or a reused one, and the OS drops this lease when its holder dies (ADR-0014).
  */
-export function describeScanJob(job: ScanJob | undefined, daemon: ScanDaemonRecord | undefined): string | undefined {
-  if (job === undefined && daemon === undefined) return undefined;
+export async function scanLockHeld(paths: DistillPaths): Promise<boolean> {
+  const lock = await acquireScanLock(paths, { retries: 1 });
+  if (lock === undefined) return true;
+  lock.release();
+  return false;
+}
+
+/** One scan at a time, across processes: the scan lock is distinct from the store lock. */
+export async function acquireScanLock(
+  paths: DistillPaths,
+  options: { retries?: number; retryDelayMs?: number } = {},
+): Promise<FileLockHandle | undefined> {
+  await fs.mkdir(paths.locksDir, { recursive: true });
+  try {
+    return await acquireFileLock(path.join(paths.locksDir, "scan"), { retries: 1, ...options });
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForLockFree(paths: DistillPaths, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await scanLockHeld(paths))) return true;
+    await scheduler.wait(250);
+  }
+  return !(await scanLockHeld(paths));
+}
+
+export async function cancelScanJob(paths: DistillPaths, graceMs = CANCEL_GRACE_MS): Promise<ScanCancelOutcome> {
+  if (!(await scanLockHeld(paths))) return "idle";
+  // Graceful first: the runner notices within a poll interval, aborts the evaluation in flight and
+  // keeps everything it has already recorded.
+  await requestScanCancel(paths);
+  if (await waitForLockFree(paths, graceMs)) return "cancelled";
+
+  // It would not go. The pid is the runner's own, written by the spawn that started it, and the
+  // lock is still held by *something*, so this kills the process holding it rather than a stranger.
+  const job = await readScanJob(paths);
+  if (job?.pid === undefined) return "unreachable";
+  try {
+    process.kill(job.pid, "SIGTERM");
+  } catch {
+    return "unreachable";
+  }
+  return (await waitForLockFree(paths, 5_000)) ? "stopped" : "unreachable";
+}
+
+export interface ScanJobState {
+  /** Whether the scan lock is held — the truth about liveness, and the only one. */
+  running: boolean;
+  /** Whether the pid the spawn recorded is still alive: the seconds before the runner locks. */
+  pidAlive: boolean;
+}
+
+/**
+ * The one line `/distill status` adds about scanning, in every state it can be in: running,
+ * starting up (spawned, lock not yet taken), interrupted (the journal says running and the lock is
+ * free), or over — finished, cancelled or failed, with a failed session's reason on the line rather
+ * than hidden (ADR-0008 keeps technical faults visible).
+ */
+export function describeScanJob(job: ScanJob | undefined, state: ScanJobState): string | undefined {
   const done = job?.sessions.filter(session => session.status === "done" || session.status === "failed").length ?? 0;
   const total = job?.sessions.length ?? 0;
   const counted = `${done} of ${total} session(s)`;
-  // A scan with no daemon is either the fallback (running in the operator's own session, which
-  // writes its pid to the journal) or one whose process died. A "running" journal without a pid is
-  // impossible from a live runner — the runner writes both together — so it reads as gone.
-  const running = job !== undefined && job.status === "running" && job.pid !== undefined && pidAlive(job.pid);
+  // A session that failed is not a session that taught nothing: ADR-0008 keeps technical faults
+  // visible, and the line would otherwise read like an empty, healthy scan.
+  const failed = job?.sessions.filter(session => session.status === "failed").length ?? 0;
+  const firstReason = job?.sessions.find(session => session.status === "failed")?.reason ?? job?.errors[0];
+  const failures = failed === 0 ? "" : `, ${failed} failed${firstReason === undefined ? "" : `: ${firstReason}`}`;
 
-  if (daemonAlive(daemon) || running) {
-    const current = job?.sessions.find(session => session.status === "running");
-    const at = job === undefined ? "" : ` — session ${Math.min(done + 1, Math.max(total, 1))} of ${total}${current === undefined ? "" : ` (${sessionLabel(current)})`}`;
-    const pid = daemon?.pid ?? job?.pid;
-    return `scan: running since ${stamp(job?.startedAt)}${at}; ${job?.lessons ?? 0} lesson(s) so far${pid === undefined ? "" : ` (pid ${pid})`}`;
+  if (state.running && job !== undefined) {
+    const current = job.sessions.find(session => session.status === "running");
+    const at = ` — session ${Math.min(done + 1, Math.max(total, 1))} of ${total}${current === undefined ? "" : ` (${sessionLabel(current)})`}`;
+    return `scan: running since ${stamp(job.startedAt)}${at}; ${job.lessons} lesson(s) so far${job.pid === undefined ? "" : ` (pid ${job.pid})`}`;
   }
 
   if (job === undefined) {
-    return `scan: ${daemon?.state ?? "unknown"}${daemon?.exitReason === undefined ? "" : ` (${daemon.exitReason})`} — no journal was left, so its progress is unknown`;
+    // No journal: nothing ever ran here, or the lock is held by a scan whose journal went missing
+    // underneath it (a purge during a scan, say).
+    return state.running ? "scan: running, but it left no journal, so its progress is unknown" : undefined;
+  }
+
+  // Spawned, journal written, lock not taken yet: this is the second or two of booting.
+  if ((job.status === "starting" || job.status === "running") && state.pidAlive) {
+    return `scan: starting up${job.pid === undefined ? "" : ` (pid ${job.pid})`} — the runner is taking the lock`;
   }
 
   const over = job.endedAt === undefined ? "" : ` at ${stamp(job.endedAt)}`;
-  if (job.status === "cancelled") return `scan: cancelled${over} after ${counted} — the rest stay eligible`;
-  if (job.status === "finished") return `scan: finished${over} — ${counted}, ${job.lessons} lesson(s) proposed`;
+  if (job.status === "cancelled") return `scan: cancelled${over} after ${counted}${failures} — the rest stay eligible`;
+  if (job.status === "finished") {
+    return `scan: finished${over} — ${counted}, ${job.lessons} lesson(s) proposed${failures}`;
+  }
   if (job.status === "failed") {
-    return `scan: failed${over} after ${counted} — ${job.errors[0] ?? daemon?.exitReason ?? "no reason given"}`;
+    return `scan: failed${over} after ${counted}${failures} — ${job.errors[0] ?? "no reason given"}`;
   }
-  // The journal says running and the runner is gone: the OMP that owned the daemon died, or it was
-  // killed. Whatever it recorded stands; the traces it never reached stay eligible.
-  return `scan: interrupted${over} after ${counted} — its runner is gone (${daemon?.exitReason ?? "no daemon record"}); the rest stay eligible`;
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means it exists and belongs to someone else; ESRCH means it is gone.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+  // The journal says it is running and the lock is free with no live pid: the process that held it
+  // is gone. Whatever it recorded stands; the traces it never reached stay eligible.
+  return `scan: interrupted${over} after ${counted}${failures} — nothing holds the scan lock; the rest stay eligible`;
 }
 
 function sessionLabel(session: ScanJobSession): string {
@@ -257,84 +306,20 @@ function isScanJob(value: unknown): value is ScanJob {
   if (!Array.isArray(job.sessions) || !Array.isArray(job.errors)) return false;
   return job.sessions.every(session => {
     const entry = session as Partial<ScanJobSession>;
-    return typeof entry.sessionId === "string" && typeof entry.title === "string" && typeof entry.status === "string";
+    return (
+      typeof entry.sessionId === "string" &&
+      typeof entry.path === "string" &&
+      typeof entry.title === "string" &&
+      typeof entry.created === "string" &&
+      typeof entry.status === "string"
+    );
   });
 }
 
-function recordOf(value: unknown): ScanDaemonRecord | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const entry = value as Record<string, unknown>;
-  if (typeof entry.name !== "string" || typeof entry.state !== "string") return undefined;
-  return {
-    name: entry.name,
-    state: entry.state,
-    ...(typeof entry.pid === "number" ? { pid: entry.pid } : {}),
-    ...(typeof entry.exitCode === "number" ? { exitCode: entry.exitCode } : {}),
-    ...(typeof entry.exitReason === "string" ? { exitReason: entry.exitReason } : {}),
-    ...(typeof entry.outputBytes === "number" ? { outputBytes: entry.outputBytes } : {}),
-  };
-}
-
 /**
- * The host's broker, behind a package subpath a compiled host may not serve (ADR-0011): the import
- * is lazy, cached, and its absence degrades to running the scan in this process.
+ * Test-only: the spawner the command would otherwise use. Tests pin the launch plan without leaving
+ * an `omp` process behind on the machine running the suite.
  */
-let brokerLoader: Promise<ScanBroker | undefined> | undefined;
-let brokerOverride: ScanBroker | undefined;
-
-async function scanBroker(paths: DistillPaths): Promise<ScanBroker | undefined> {
-  if (brokerOverride !== undefined) return brokerOverride;
-  brokerLoader ??= (async (): Promise<ScanBroker | undefined> => {
-    try {
-      const module = (await import("@oh-my-pi/pi-coding-agent/launch/client")) as {
-        daemonClientForProject?: (projectDir: string) => Promise<{ request: (operation: unknown) => Promise<unknown> }>;
-      };
-      if (typeof module.daemonClientForProject !== "function") return undefined;
-      const client = await module.daemonClientForProject(paths.projectRoot);
-      return {
-        async start(spec) {
-          const reply = recordOfReply(await client.request({ op: "start", spec, replace: true }));
-          return reply.pid === undefined ? {} : { pid: reply.pid };
-        },
-        async list() {
-          const reply = (await client.request({ op: "list" })) as { daemons?: unknown };
-          const daemons = Array.isArray(reply.daemons) ? reply.daemons : [];
-          const records: ScanDaemonRecord[] = [];
-          for (const entry of daemons) {
-            const record = recordOf(entry);
-            if (record) records.push(record);
-          }
-          return records;
-        },
-        async waitForExit(name, timeoutMs) {
-          const reply = (await client.request({ op: "wait", name, for: "exit", timeoutMs })) as { timedOut?: unknown };
-          return reply.timedOut !== true;
-        },
-        async stop(name, timeoutMs) {
-          const reply = (await client.request({ op: "stop", name, timeoutMs })) as { op?: unknown };
-          return reply.op === "stop";
-        },
-      };
-    } catch {
-      return undefined;
-    }
-  })();
-  try {
-    return await brokerLoader;
-  } catch {
-    return undefined;
-  }
-}
-
-function recordOfReply(value: unknown): ScanDaemonRecord {
-  const daemon = (value as { daemon?: unknown } | undefined)?.daemon;
-  return recordOf(daemon) ?? { name: SCAN_DAEMON_NAME, state: "starting" };
-}
-
-/**
- * Test-only: the broker these functions would otherwise reach. Tests pin the launch spec and the
- * status line without spawning a real broker in `~/.omp/run`.
- */
-export function __setScanBrokerForTests(broker: ScanBroker | undefined): void {
-  brokerOverride = broker;
+export function __setScanSpawnForTests(spawner: ScanSpawner | undefined): void {
+  spawnerOverride = spawner;
 }

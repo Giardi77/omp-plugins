@@ -25,6 +25,13 @@ Consequences that had to be settled with it:
 - **The payload planner's job changed.** Splitting and packing now guard the *inventory*, not the
   records: they trigger only for a session with so many traces that the inventory itself would not
   fit, so they are a cost and latency lever rather than the hard size limit they were written as.
+- **Reachable by design.** This paragraph first gave a second reason for rejecting raw reading —
+  that it exposes fields the render leaves out — and that reason was wrong the moment `get_trace`
+  arrived: its `jq` filter reads the same records unfiltered, and the inventory hands over the
+  transcript path, so `read` reaches them too. `include_thinking` and the elision of tool results
+  decide what the *rendered sections* show, never what the evaluator may read (ADR-0005: distill
+  masks nothing). The operator confirmed this is the intent: the sections are for reading, not for
+  gating.
 - **`jq` is run by the plugin, not by a shell.** The evaluator gains no `bash`: the filter is one
   argv element, the input is the trace's own records as NDJSON, the module search path is empty so
   `include`/`import` cannot read the filesystem, output is capped, and the process is killed on
@@ -33,8 +40,8 @@ Consequences that had to be settled with it:
 **Considered Options**: keep the whole rendered trace and accept the flood — rejected by the operator
 and by the failure that started this (a payload larger than the model's window is not a judgement
 problem, it is a bug); let the model read the raw JSONL itself with `read`/`grep` — rejected, the raw
-store is eight times the bytes for the same information, it requires the model to reconstruct the
-active branch, and it exposes the records and fields the render deliberately leaves out; give the
+store is eight times the bytes for the same information and it requires the model to reconstruct the
+active branch; give the
 sealed session `bash` so it can run `jq` itself — rejected, one tool for exact extraction is a smaller
 grant than an arbitrary shell; a `payload: digest | skeleton` config key — rejected as a knob for a
 decision the plugin can make on its own.
