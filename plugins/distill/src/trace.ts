@@ -129,8 +129,6 @@ export function renderPayload(bundle: TraceBundle, options: TraceRenderOptions):
   lines.push(`session: ${bundle.sessionId}`);
   lines.push(`traces: ${bundle.traces.length}`);
   lines.push("");
-  lines.push("Cite a record as trace:record, copying both ids from the brackets.");
-  lines.push("");
 
   for (const trace of bundle.traces) {
     lines.push(`## trace ${trace.id} — ${trace.label}`);

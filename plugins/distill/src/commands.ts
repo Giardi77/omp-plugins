@@ -141,7 +141,7 @@ export async function runDistillCommand(
       await runToggle(ctx, paths, invocation.command === "enable");
       return;
     case "status":
-      await runStatus(ctx, paths);
+      await runStatus(pi, ctx, paths);
       return;
     case "scan":
       await runScan(pi, ctx, paths, invocation.flags);
@@ -299,7 +299,7 @@ export function renderStatus(summary: StatusSummary): string {
   return lines.join("\n");
 }
 
-async function runStatus(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
+async function runStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
   const config = await readConfig(paths);
   if (!config) {
     notify(ctx, "This project is not active: no .omp/distill/config.yaml yet. Run /distill setup.", "info");
@@ -307,6 +307,7 @@ async function runStatus(ctx: ExtensionCommandContext, paths: DistillPaths): Pro
   }
   const discovery = await listProjectSessions({
     cwd: paths.projectRoot,
+    agentDir: pi.pi.getAgentDir(),
     sessionDir: ctx.sessionManager.getSessionDir(),
   });
   notify(ctx, renderStatus(await collectStatus(paths, config, discovery)), "info");
@@ -336,6 +337,7 @@ async function runScan(
 
   const discovery = await listProjectSessions({
     cwd: paths.projectRoot,
+    agentDir: pi.pi.getAgentDir(),
     sessionDir: ctx.sessionManager.getSessionDir(),
   });
   const retired = await retiredTraceSessionIds(paths);

@@ -158,6 +158,11 @@ export interface WriteResult {
  * check-and-write runs under the project's store lock, so two approvals cannot both pass the
  * cap and land past it (ADR-0003's serialized mutations).
  */
+async function refuseSymlink(target: string): Promise<void> {
+  const stats = await fs.lstat(target).catch(() => undefined);
+  if (stats?.isSymbolicLink()) throw new Error(`Refusing to write through the symlink ${target}.`);
+}
+
 export async function applyWrite(
   paths: DistillPaths,
   plan: WritePlan,
@@ -171,6 +176,10 @@ async function writePlan(plan: WritePlan): Promise<WriteResult> {
     if (bytes > MAX_MANAGED_SKILL_BYTES) {
       throw new Error(`${plan.filePath} would be ${bytes} bytes, over the ${MAX_MANAGED_SKILL_BYTES}-byte cap.`);
     }
+    // Same posture as the host's managed-skill write: a symlinked skill root or slug
+    // directory is refused rather than followed, before anything is created.
+    await refuseSymlink(path.dirname(path.dirname(plan.filePath)));
+    await refuseSymlink(path.dirname(plan.filePath));
     await fs.mkdir(path.dirname(plan.filePath), { recursive: true });
     const handle = await fs.open(plan.filePath, "wx");
     try {

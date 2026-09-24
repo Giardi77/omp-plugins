@@ -3,7 +3,6 @@ import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import {
   CURRENT_SESSION_VERSION,
   type FileEntry,
@@ -34,7 +33,6 @@ export interface StoreLocation {
 }
 
 export interface StoreOverrides {
-  agentDir?: string;
   home?: string;
   tmpDir?: string;
   /** Symlink resolution used before deciding a path's scope; injectable for tests. */
@@ -70,13 +68,18 @@ export function encodeSessionDirName(cwd: string, overrides: StoreOverrides = {}
   return `--${canonicalCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
-export function sessionsRoot(agentDir: string = getAgentDir()): string {
+/**
+ * `agentDir` is the host's own answer — read it from `pi.pi.getAgentDir()`, never from an
+ * import: a direct import of the SDK index evaluates a second copy of its whole module graph
+ * inside the host process, which is the hazard ADR-0007 names.
+ */
+export function sessionsRoot(agentDir: string): string {
   return path.join(agentDir, "sessions");
 }
 
-export function resolveStore(cwd: string, overrides: StoreOverrides = {}): StoreLocation {
-  const root = sessionsRoot(overrides.agentDir);
-  return { root, projectDir: path.join(root, encodeSessionDirName(cwd, overrides)) };
+export function resolveStore(cwd: string, options: { agentDir: string } & StoreOverrides): StoreLocation {
+  const root = sessionsRoot(options.agentDir);
+  return { root, projectDir: path.join(root, encodeSessionDirName(cwd, options)) };
 }
 
 /** True when `child` is `parent` itself or lives beneath it. */
@@ -108,6 +111,8 @@ export interface SessionDiscovery {
 
 export interface ListSessionsOptions extends StoreOverrides {
   cwd: string;
+  /** The host's agent directory, from `pi.pi.getAgentDir()`. */
+  agentDir: string;
   /**
    * The running session's own directory. A session started in a subdirectory of the project
    * lives in a different directory than one started at its root, so both are searched; the

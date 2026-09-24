@@ -101,6 +101,8 @@ describe("payload rendering", () => {
     expect(payload).not.toContain("developer scaffolding");
     expect(payload).not.toContain("maybe the sleep is the issue");
     expect(payload).not.toContain("todo_hud_state");
+    // Mechanical instructions ride the propose_lessons description, never the payload (D17).
+    expect(payload).not.toContain("Cite a record");
   });
 
   test("reasoning text is opt-in", async () => {

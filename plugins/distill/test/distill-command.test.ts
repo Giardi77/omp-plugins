@@ -29,7 +29,7 @@ interface Harness {
   labels: string[];
 }
 
-function harness(options: { evaluate?: boolean } = {}): Harness {
+function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harness {
   const commands: Record<string, RegisteredCommand> = {};
   const sessionStart: Handler[] = [];
   const labels: string[] = [];
@@ -44,6 +44,7 @@ function harness(options: { evaluate?: boolean } = {}): Harness {
     },
     pi: {
       VERSION: "18.3.0",
+      getAgentDir: () => options.agentDir ?? "/Users/giardi/.omp/agent",
       SessionManager: { inMemory: () => ({ memory: true }) },
       createAgentSession: async (createOptions: CreateAgentSessionOptions) => {
         const tool = createOptions.customTools?.[0];
@@ -151,7 +152,7 @@ afterEach(() => {
   lastPayload = "";
 });
 
-async function projectWithSession(): Promise<{ project: string; sessionDir: string }> {
+async function projectWithSession(): Promise<{ project: string; sessionDir: string; agentDir: string }> {
   const root = await makeTempDir("omp-distill-command-");
   // The project sits beside the fake home: a `.omp/` above it would otherwise be found by
   // the project-root walk-up (in a real session, home itself is excluded).
@@ -168,7 +169,7 @@ async function projectWithSession(): Promise<{ project: string; sessionDir: stri
       assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart("raised it to 250ms")]),
     ],
   });
-  return { project, sessionDir };
+  return { project, sessionDir, agentDir: path.join(home, ".omp", "agent") };
 }
 
 describe("the distill command", () => {
@@ -189,8 +190,8 @@ describe("the distill command", () => {
   });
 
   test("a project with no config file is reported, not scanned", async () => {
-    const { project, sessionDir } = await projectWithSession();
-    const { api, commands } = harness();
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
 
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
@@ -200,8 +201,8 @@ describe("the distill command", () => {
   });
 
   test("setup activates the project, and enable/disable toggle it", async () => {
-    const { project, sessionDir } = await projectWithSession();
-    const { api, commands } = harness();
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
     const paths = distillPaths(project);
 
@@ -230,11 +231,11 @@ describe("the distill command", () => {
   });
 
   test("a scan evaluates the newest eligible session and records the proposal", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
-    const { api, commands } = harness({ evaluate: true });
+    const { api, commands } = harness({ evaluate: true, agentDir });
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
@@ -261,11 +262,11 @@ describe("the distill command", () => {
   });
 
   test("a dry run prints the payload and writes nothing", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
-    const { api, commands } = harness();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
     const { ctx, notifications } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
@@ -279,9 +280,9 @@ describe("the distill command", () => {
   });
 
   test("a scan with nothing eligible says so", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     await setupProject(project);
-    const { api, commands } = harness({ evaluate: true });
+    const { api, commands } = harness({ evaluate: true, agentDir });
     distillExtension(api);
 
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
@@ -293,7 +294,7 @@ describe("the distill command", () => {
   });
 
   test("review in a session without a window reports where the lessons wait", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
     await Bun.write(
@@ -312,7 +313,7 @@ describe("the distill command", () => {
       }),
     );
 
-    const { api, commands } = harness();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
     const output = await captureStdout(() => commands.distill!.handler("review", ctx));
@@ -320,7 +321,7 @@ describe("the distill command", () => {
   });
 
   test("purge deletes the records, names what it left alone, and re-opens the session", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
@@ -342,7 +343,7 @@ describe("the distill command", () => {
       }),
     );
 
-    const { api, commands } = harness();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
@@ -353,10 +354,10 @@ describe("the distill command", () => {
   });
 
   test("purge without confirmation explains itself instead of deleting", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
-    const { api, commands } = harness();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
 
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
@@ -366,8 +367,8 @@ describe("the distill command", () => {
   });
 
   test("an unknown subcommand prints the usage", async () => {
-    const { project, sessionDir } = await projectWithSession();
-    const { api, commands } = harness();
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, commands } = harness({ agentDir });
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
@@ -379,7 +380,7 @@ describe("the distill command", () => {
 
 describe("the session-start notice", () => {
   test("fires once for a project with proposed lessons, and only where a UI can show it", async () => {
-    const { project, sessionDir } = await projectWithSession();
+    const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
     await Bun.write(
@@ -398,7 +399,7 @@ describe("the session-start notice", () => {
       }),
     );
 
-    const { api, sessionStart } = harness();
+    const { api, sessionStart } = harness({ agentDir });
     distillExtension(api);
 
     const tui = fakeContext({ cwd: project, mode: "tui", sessionDir });
@@ -413,8 +414,8 @@ describe("the session-start notice", () => {
   });
 
   test("stays silent in a project that never activated distill", async () => {
-    const { project, sessionDir } = await projectWithSession();
-    const { api, sessionStart } = harness();
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const { api, sessionStart } = harness({ agentDir });
     distillExtension(api);
 
     const tui = fakeContext({ cwd: project, mode: "tui", sessionDir });

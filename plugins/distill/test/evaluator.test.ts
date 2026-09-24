@@ -118,13 +118,14 @@ function isProposeTool(value: unknown): value is ProposeLessonsTool {
   return isRecord(value) && typeof value.name === "string" && typeof value.execute === "function";
 }
 
-async function run(script: Script) {
+async function run(script: Script, overrides: { config?: typeof DEFAULT_CONFIG; now?: number } = {}) {
   const { paths, bundle } = await fixtureBundle();
   const fake = scriptedSdk(script);
   const result = await runEvaluation({
     sdk: fake.sdk,
     paths,
-    config: DEFAULT_CONFIG,
+    config: overrides.config ?? DEFAULT_CONFIG,
+    ...(overrides.now === undefined ? {} : { now: overrides.now }),
     bundle,
     payload: "# distill payload\ntrace abc12345\n[aaaa0002] assistant: raised it to 250ms\n",
     evaluatorPrompt: "# taste\n",
@@ -254,6 +255,15 @@ describe("a run", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toContain("exceeded the 600s deadline");
     expect(fake.disposedCount()).toBe(1);
+  });
+
+  test("a deadline that ends the run without a throw is still a timeout", async () => {
+    // The host ends a deadline-exceeded stream gracefully, so the run reaches waitForIdle and
+    // simply never calls the tool; the elapsed deadline is what makes it a timeout (D14).
+    const { result } = await run({}, { config: { ...DEFAULT_CONFIG, timeout_seconds: 1 }, now: Date.now() - 5_000 });
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("exceeded the 1s deadline");
   });
 
   test("the evaluator's reads are reconstructed from its own transcript", async () => {

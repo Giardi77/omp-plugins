@@ -187,6 +187,7 @@ export interface RunEvaluationInput {
 export async function runEvaluation(input: RunEvaluationInput): Promise<EvaluationRun> {
   assertHostVersion(input.sdk.VERSION);
   const now = input.now ?? Date.now();
+  const deadline = now + input.config.timeout_seconds * 1_000;
   const submissions: Array<{ verdict: string; proposals: ProposalInput[] }> = [];
   const renderOptions = { includeThinking: input.config.include_thinking };
 
@@ -253,6 +254,12 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
       failure = describeRunFailure(error, input.config.timeout_seconds);
     }
     if (input.signal?.aborted && failure === undefined) failure = "cancelled";
+    // The host ends a deadline-exceeded stream gracefully rather than throwing, so the
+    // deadline is re-checked here: otherwise a timed-out run would be recorded as one that
+    // simply never called the tool, which is the wrong reason under D14.
+    if (failure === undefined && submissions.length === 0 && Date.now() >= deadline) {
+      failure = `exceeded the ${input.config.timeout_seconds}s deadline`;
+    }
 
     const reads = readPathsFromTranscript(session.sessionManager.getEntries());
     const last = submissions[submissions.length - 1];

@@ -153,6 +153,26 @@ describe("applying a write", () => {
     expect((await Bun.file(filePath).text()).endsWith(`${padding}\n`)).toBe(true);
   });
 
+  test("a mint refuses a symlinked skill root or slug directory", async () => {
+    const paths = await project();
+    const elsewhere = path.join(paths.projectRoot, "elsewhere");
+    await fs.mkdir(elsewhere, { recursive: true });
+    await fs.mkdir(path.join(paths.projectRoot, ".omp"), { recursive: true });
+    await fs.symlink(elsewhere, path.join(paths.projectRoot, ".omp", "skills"));
+
+    const plan = await planWrite(paths, lesson({ kind: "new_skill", target: "retry-backoff" }));
+    await expect(applyWrite(paths, plan)).rejects.toThrow("Refusing to write through the symlink");
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+  });
+
+  test("a mint over the cap leaves nothing behind", async () => {
+    const paths = await project();
+    const plan = await planWrite(paths, lesson({ kind: "new_skill", target: "retry-backoff", body: "y".repeat(64_001) }));
+
+    await expect(applyWrite(paths, plan)).rejects.toThrow("over the 64000-byte cap");
+    expect(await fs.stat(plan.filePath).catch(() => undefined)).toBeUndefined();
+  });
+
   test("a symlinked or hard-linked skill file is refused", async () => {
     const paths = await project();
     await writeSkill(paths, "retry-helper", "---\nname: retry-helper\ndescription: Retries\n---\n");
