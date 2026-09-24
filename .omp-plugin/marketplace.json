@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Giardi77's OMP plugin marketplace.",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "pluginRoot": "plugins"
   },
   "plugins": [
@@ -29,7 +29,7 @@
     {
       "name": "omp-distill-extension",
       "description": "Turn recorded OMP sessions into reviewed project knowledge.",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "source": "./distill",
       "author": {
         "name": "Giardi77"

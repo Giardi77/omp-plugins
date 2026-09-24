@@ -80,7 +80,7 @@ function scriptedSdk(script: Script) {
       prompted.push(text);
       if (script.promptError) throw script.promptError;
       const options = created[created.length - 1];
-      const tool = options?.customTools?.[0];
+      const tool = options?.customTools?.find(candidate => isRecord(candidate) && candidate.name === "propose_lessons");
       if (!isProposeTool(tool)) throw new Error("the sealed options carried no propose_lessons tool");
       for (const call of script.calls ?? []) {
         let failure: string | undefined;
@@ -146,7 +146,7 @@ describe("sealing", () => {
     const options = sealedSessionOptions({
       projectRoot: "/work/alpha",
       evaluatorPrompt: "# taste",
-      tool,
+      tools: [tool],
       sessionManager,
       modelRegistry,
       timeoutSeconds: 600,
@@ -156,7 +156,7 @@ describe("sealing", () => {
     expect(options.cwd).toBe("/work/alpha");
     expect(options.systemPrompt).toEqual(["# taste"]);
     expect(options.restrictToolNames).toBe(true);
-    expect(options.toolNames).toEqual(["read", "glob", "grep", "propose_lessons"]);
+    expect(options.toolNames).toEqual(["read", "glob", "grep", "get_trace", "propose_lessons"]);
     expect(options.allowRestrictedCustomTools).toBe(true);
     expect(options.disableExtensionDiscovery).toBe(true);
     expect(options.skills).toEqual([]);
@@ -177,15 +177,15 @@ describe("sealing", () => {
   });
 
   test("the tool surface is compared, not trusted", () => {
-    expect(() => assertToolSurface(["read", "glob", "grep", "propose_lessons"])).not.toThrow();
+    expect(() => assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons"])).not.toThrow();
 
-    expect(() => assertToolSurface(["read", "glob", "grep", "propose_lessons", "write"])).toThrow(ToolSurfaceMismatch);
+    expect(() => assertToolSurface(["read", "glob", "grep", "get_trace", "propose_lessons", "write"])).toThrow(ToolSurfaceMismatch);
     try {
       assertToolSurface(["read", "glob", "write"]);
     } catch (error) {
       const mismatch = error as ToolSurfaceMismatch;
       expect(mismatch.unexpected).toEqual(["write"]);
-      expect(mismatch.missing).toEqual(["grep", "propose_lessons"]);
+      expect(mismatch.missing).toEqual(["grep", "get_trace", "propose_lessons"]);
       expect(mismatch.message).toContain("does not match the sealed list");
     }
   });

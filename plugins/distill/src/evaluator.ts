@@ -3,6 +3,9 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { DistillPaths } from "./config";
 import type { DistillConfig } from "./config";
 import {
+  GET_TRACE_DESCRIPTION,
+  GET_TRACE_PARAMETERS,
+  GET_TRACE_TOOL,
   parseAnswer,
   PROPOSE_LESSONS_DESCRIPTION,
   PROPOSE_LESSONS_PARAMETERS,
@@ -11,7 +14,8 @@ import {
 } from "./contract";
 import type { ProposalInput } from "./lessons";
 import { isRecord, messageOf } from "./util";
-import { capText, type TraceBundle } from "./trace";
+import { runJq } from "./jq";
+import { capText, renderTraceSection, type TraceBundle, type TraceRenderOptions } from "./trace";
 
 /**
  * The evaluator: a second, sealed agent session inside the host process, built from
@@ -32,7 +36,7 @@ export type EvaluatorModel = NonNullable<CreateAgentSessionOptions["model"]>;
 export type EvaluatorSessionManager = NonNullable<CreateAgentSessionOptions["sessionManager"]>;
 export type EvaluatorModelRegistry = NonNullable<CreateAgentSessionOptions["modelRegistry"]>;
 
-export const EVALUATOR_TOOL_NAMES: readonly string[] = ["read", "glob", "grep", PROPOSE_LESSONS_TOOL];
+export const EVALUATOR_TOOL_NAMES: readonly string[] = ["read", "glob", "grep", GET_TRACE_TOOL, PROPOSE_LESSONS_TOOL];
 
 /** Conservative characters per token: a measured trace ran ~3.3, and underestimating splits early. */
 export const CHARS_PER_TOKEN = 3;
@@ -122,7 +126,9 @@ export interface EvaluatorSdkLike {
   SessionManager: { inMemory(cwd?: string): EvaluatorSessionManager };
 }
 
-export interface ProposeLessonsTool {
+export type ProposeLessonsTool = EvaluatorTool;
+
+export interface EvaluatorTool {
   name: string;
   label: string;
   description: string;
@@ -133,7 +139,7 @@ export interface ProposeLessonsTool {
 export interface SealedSessionInput {
   projectRoot: string;
   evaluatorPrompt: string;
-  tool: ProposeLessonsTool;
+  tools: EvaluatorTool[];
   sessionManager: EvaluatorSessionManager;
   modelRegistry: EvaluatorModelRegistry;
   model?: EvaluatorModel;
@@ -156,7 +162,7 @@ export function sealedSessionOptions(input: SealedSessionInput): CreateAgentSess
     toolNames: [...EVALUATOR_TOOL_NAMES],
     restrictToolNames: true,
     allowRestrictedCustomTools: true,
-    customTools: [input.tool],
+    customTools: [...input.tools],
     disableExtensionDiscovery: true,
     skills: [],
     rules: [],
@@ -199,6 +205,41 @@ export interface RunEvaluationInput {
   now?: number;
   /** Cancellation: `/distill purge` asks a running scan to stop (D19). */
   signal?: AbortSignal;
+}
+
+/**
+ * Reads one trace on the evaluator's behalf: a record range, a pattern match, or a jq filter over
+ * the trace's own records. Every answer is bounded, and every answer carries the record ids a
+ * citation needs. Problems come back as content rather than as a failed run — reading is an
+ * iteration, not a submission.
+ */
+export async function readTrace(
+  params: unknown,
+  bundle: TraceBundle,
+  options: TraceRenderOptions,
+): Promise<string> {
+  const request = isRecord(params) ? params : {};
+  const wanted = typeof request.trace === "string" ? request.trace.trim() : "";
+  const trace = bundle.traces.find(candidate => candidate.id === wanted);
+  if (!trace) {
+    const known = bundle.traces.map(candidate => `${candidate.id} (${candidate.label})`).join(", ");
+    return `No trace "${wanted}" in this payload. The traces are: ${known}.`;
+  }
+
+  if (typeof request.jq === "string" && request.jq.trim() !== "") {
+    const result = await runJq(request.jq, trace.records);
+    return result.ok
+      ? `jq ${request.jq.trim()} over trace ${trace.id} (${trace.records.length} records)\n${result.output}`
+      : `jq could not answer that: ${result.error}`;
+  }
+
+  const section = renderTraceSection(trace, options, {
+    ...(typeof request.from === "number" ? { from: request.from } : {}),
+    ...(typeof request.to === "number" ? { to: request.to } : {}),
+    ...(typeof request.pattern === "string" ? { pattern: request.pattern } : {}),
+    ...(typeof request.limit === "number" ? { limit: request.limit } : {}),
+  });
+  return section.text;
 }
 
 /**
@@ -259,12 +300,22 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
     },
   };
 
+  const traceTool: EvaluatorTool = {
+    name: GET_TRACE_TOOL,
+    label: "Read a trace section",
+    description: GET_TRACE_DESCRIPTION,
+    parameters: GET_TRACE_PARAMETERS,
+    async execute(_toolCallId, params) {
+      return { content: [{ type: "text", text: await readTrace(params, input.bundle, renderOptions) }] };
+    },
+  };
+
   const session = (
     await input.sdk.createAgentSession(
       sealedSessionOptions({
         projectRoot: input.paths.projectRoot,
         evaluatorPrompt: input.evaluatorPrompt,
-        tool,
+        tools: [traceTool, tool],
         sessionManager: input.sdk.SessionManager.inMemory(input.paths.projectRoot),
         modelRegistry: input.modelRegistry,
         model: input.model,
@@ -367,8 +418,19 @@ export function readPathsFromTranscript(entries: readonly unknown[]): string[] {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (!isRecord(part) || part.type !== "toolCall" || typeof part.name !== "string") continue;
-      if (!["read", "glob", "grep"].includes(part.name)) continue;
+      if (!["read", "glob", "grep", GET_TRACE_TOOL].includes(part.name)) continue;
       const args = isRecord(part.arguments) ? part.arguments : {};
+      if (part.name === GET_TRACE_TOOL) {
+        const trace = typeof args.trace === "string" ? args.trace : "?";
+        const how =
+          typeof args.jq === "string"
+            ? `jq ${args.jq}`
+            : typeof args.pattern === "string"
+              ? `pattern "${args.pattern}"`
+              : `records ${typeof args.from === "number" ? args.from : 1}${typeof args.to === "number" ? `..${args.to}` : ".."}`;
+        reads.add(`get_trace ${trace} ${how}`);
+        continue;
+      }
       const where = typeof args.path === "string" ? args.path : undefined;
       if (part.name === "grep" && typeof args.pattern === "string") {
         reads.add(`grep ${args.pattern} in ${where ?? "."}`);

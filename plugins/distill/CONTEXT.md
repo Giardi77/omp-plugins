@@ -22,6 +22,11 @@ _Avoid_: conversation, thread, run
 The bounded, derived view of one session, or of one of its subagents, that distill works from.
 _Avoid_: log, transcript, projection
 
+**Section**:
+A bounded slice of one trace's records, read with `get_trace` — a range, a pattern match, or a jq answer —
+carrying the record ids a citation names.
+_Avoid_: chunk, page, excerpt
+
 **Event**:
 Unused. The store's records are records; distill does not capture events.
 _Avoid_: —
@@ -72,10 +77,9 @@ version bump (ADR-0008).
 _Avoid_: rubric, prompt, template, schema
 
 **Payload**:
-The bytes distill hands the evaluator for one evaluation: the traces that run was given — the session's
-parent and subagent traces, or the subset a packed or split bundle left it — and nothing else. It is a
-bounded rendering rather than a transcript dump: tool results arrive as their first line and size, and
-each trace names the transcript file its records came from.
+The bytes distill hands the evaluator for one evaluation: an inventory of the traces that run was given
+— each one's id, label, record range, size and transcript file — and no records, which are read with
+`get_trace` (ADR-0013).
 _Avoid_: prompt, projection
 
 **Scan**:

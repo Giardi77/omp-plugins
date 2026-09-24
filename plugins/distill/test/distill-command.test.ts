@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { YAML } from "bun";
 import type { CreateAgentSessionOptions, ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { distillPaths, setupProject } from "../src/config";
-import { EVALUATOR_TOOL_NAMES, type ProposeLessonsTool } from "../src/evaluator";
+import { EVALUATOR_TOOL_NAMES, type EvaluatorTool } from "../src/evaluator";
 import distillExtension from "../src/index";
-import { listLessons, readLedger } from "../src/lessons";
+import { evaluationRecord, listLessons, readLedger } from "../src/lessons";
 import { resolveStore } from "../src/store";
 import { isRecord } from "../src/util";
 import { assistantMessage, makeTempDir, textPart, userMessage, writeSessionFixture } from "./fixtures";
@@ -51,12 +51,17 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
       SessionManager: { inMemory: () => ({ memory: true }) },
       createAgentSession: async (createOptions: CreateAgentSessionOptions) => {
         created.push(createOptions);
-        const tool = createOptions.customTools?.[0];
+        const tools = {
+          trace: createOptions.customTools?.find(candidate => isRecord(candidate) && candidate.name === "get_trace"),
+          propose: createOptions.customTools?.find(candidate => isRecord(candidate) && candidate.name === "propose_lessons"),
+        };
         return {
           session: {
             prompt: async (text: string) => {
               lastPayload = text;
-              if (options.evaluate && isProposeTool(tool)) await tool.execute("call-id", submissionFor(text));
+              if (options.evaluate && isEvaluatorTool(tools.trace) && isEvaluatorTool(tools.propose)) {
+                lastRead = await scriptedAnswer({ trace: tools.trace, propose: tools.propose }, text);
+              }
               return true;
             },
             waitForIdle: async () => {},
@@ -72,10 +77,16 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
   return { api: pi as unknown as ExtensionAPI, commands, sessionStart, labels, created };
 }
 
-function submissionFor(payload: string) {
-  const traceId = /## trace ([0-9a-z-]+)/.exec(payload)?.[1] ?? "";
-  const recordId = /\[([0-9a-f]{8})\]/.exec(payload)?.[1] ?? "";
-  return {
+/**
+ * What a real evaluator does now: read the inventory, fetch a section with get_trace, and cite a
+ * record it actually read. Anything less would not exercise the reading path at all.
+ */
+async function scriptedAnswer(tools: { trace: EvaluatorTool; propose: EvaluatorTool }, inventory: string) {
+  const traceId = /## trace ([0-9a-z-]+)/.exec(inventory)?.[1] ?? "";
+  const read = await tools.trace.execute("call-read", { trace: traceId, from: 1, to: 40 });
+  const section = read.content[0]?.text ?? "";
+  const recordId = /\[([0-9a-f]{8})\]/.exec(section)?.[1] ?? "";
+  await tools.propose.execute("call-propose", {
     verdict: "one lesson from the fixture",
     lessons: [
       {
@@ -87,15 +98,18 @@ function submissionFor(payload: string) {
         citations: [`${traceId}:${recordId}`],
       },
     ],
-  };
+  });
+  return { traceId, recordId, section };
 }
 
-function isProposeTool(value: unknown): value is ProposeLessonsTool {
+function isEvaluatorTool(value: unknown): value is EvaluatorTool {
   return isRecord(value) && typeof value.name === "string" && typeof value.execute === "function";
 }
 
-// The payload the command handed the evaluator, captured through `prompt`.
+// The payload the command handed the evaluator, captured through `prompt`, plus what the
+// scripted evaluator read out of it.
 let lastPayload = "";
+let lastRead: { traceId: string; recordId: string; section: string } | undefined;
 
 interface FakeModel {
   provider: string;
@@ -340,7 +354,9 @@ describe("the distill command", () => {
     expect(lessons).toHaveLength(1);
     expect(lessons[0]?.state).toBe("proposed");
     expect(lessons[0]?.target).toBe("retry-backoff");
-    expect(lessons[0]?.citations[0]?.citation).toBe(`aaaa1111:${RECORD_ID}`);
+    expect(lessons[0]?.citations[0]?.citation).toBe(`aaaa1111:${lastRead?.recordId ?? RECORD_ID}`);
+    expect(lastRead?.traceId).toBe("aaaa1111");
+    expect(lastRead?.section).toContain("the retry helper sleeps too little");
 
     const ledger = await readLedger(paths);
     expect(ledger).toHaveLength(1);
@@ -353,17 +369,19 @@ describe("the distill command", () => {
     expect(lastPayload).toContain("# distill payload");
   });
 
-  test("a session too big for the model is evaluated one trace at a time", async () => {
+  test("a session with several traces is one run, and its records are read by section", async () => {
     const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
-    // Sized so each trace fits the fake model's budget (which floors at 20k characters) while
-    // the pair together does not: rendered records cap at 4k characters each, so the size comes
-    // from how many records a session has, exactly as in a real oversized transcript.
     const body = "the operator corrected the retry backoff, and the correction stuck. ".repeat(70);
-    const sessionFile = (await fs.readdir(sessionDir)).map(name => path.join(sessionDir, name)).find(name => name.endsWith(".jsonl"));
-    if (sessionFile === undefined) throw new Error("no session fixture");
+    const workerLines = Array.from({ length: 8 }, (_unused, index) => {
+      const id = `6100000${index}`;
+      const parentId = index === 0 ? null : `6100000${index - 1}`;
+      return index % 2 === 0
+        ? userMessage({ id, parentId }, body)
+        : assistantMessage({ id, parentId }, [textPart(body)]);
+    });
     await writeSessionFixture({
       dir: sessionDir,
       sessionId: SESSION_ID,
@@ -371,21 +389,9 @@ describe("the distill command", () => {
       lines: [
         userMessage({ id: RECORD_ID, parentId: null }, body),
         assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart(body)]),
-        userMessage({ id: "50000003", parentId: "50000002" }, body),
-        assistantMessage({ id: "50000004", parentId: "50000003" }, [textPart(body)]),
       ],
-      subagents: [
-        {
-          name: "Worker",
-          sessionId: "aaaa1111-3333-7000-8000-000000000061",
-          lines: [
-            userMessage({ id: "60000001", parentId: null }, body),
-            assistantMessage({ id: "60000002", parentId: "60000001" }, [textPart(body)]),
-          ],
-        },
-      ],
+      subagents: [{ name: "Worker", sessionId: "aaaa1111-3333-7000-8000-000000000061", lines: workerLines }],
     });
-    void sessionFile;
 
     const { api, commands, created } = harness({ evaluate: true, agentDir });
     distillExtension(api);
@@ -398,84 +404,77 @@ describe("the distill command", () => {
 
     const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
 
-    expect(created).toHaveLength(2);
-    expect(output).toContain("2 trace(s), 2 runs");
-    // The scripted evaluator proposes the same lesson for both traces, so the second run's
-    // proposal is the duplicate the store is meant to catch.
-    expect(output).toContain("1 lesson(s) proposed in 2 run(s), 1 duplicate(s) ignored");
+    // One run for the session, whatever its size: the payload is the inventory.
+    expect(created).toHaveLength(1);
+    expect(lastPayload?.match(/## trace /g)).toHaveLength(2);
+    expect(lastPayload).toContain("records 1..8");
+    expect(output).toContain("1 lesson(s) proposed");
 
+    // And the citation came from a section the scripted evaluator actually read.
+    expect(lastRead?.traceId).toBe("aaaa1111");
     const ledger = await readLedger(paths);
     const evaluations = ledger.filter(record => record.kind === "evaluation");
-    expect(evaluations).toHaveLength(2);
-    for (const record of evaluations) {
-      if (record.kind !== "evaluation") continue;
-      expect(record.outcome).toBe("lessons");
-      expect(record.traceSessionIds).toHaveLength(1);
-    }
-    // One evaluation per trace, one lesson between them, and both traces covered.
-    expect(evaluations.flatMap(record => (record.kind === "evaluation" ? record.lessonIds : []))).toHaveLength(1);
-    expect(new Set(evaluations.flatMap(record => (record.kind === "evaluation" ? record.traceSessionIds : []))).size).toBe(2);
+    expect(evaluations).toHaveLength(1);
+    expect(evaluations[0]?.kind === "evaluation" ? evaluations[0].traceSessionIds : []).toEqual([
+      "aaaa1111-2222-7000-8000-000000000060",
+      "aaaa1111-3333-7000-8000-000000000061",
+    ]);
   });
 
-  test("one unsendable trace never starves the traces that fit, and a retry pays only for what is open", async () => {
+  test("a retry's inventory carries only the traces still open", async () => {
     const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
-    // Rendered records cap at 4k characters each, so a trace that does not fit is a trace with
-    // many records: the worker's 8 against the parent's 2, past the fake model's 20k budget.
-    const small = "the operator corrected the retry backoff, and the correction stuck. ".repeat(70);
-    const workerBody = "the worker pasted another slice of the runner log into its own transcript. ".repeat(70);
-    const workerLines = Array.from({ length: 8 }, (_unused, index) => {
-      const id = `6100000${index}`;
-      const parentId = index === 0 ? null : `6100000${index - 1}`;
-      return index % 2 === 0
-        ? userMessage({ id, parentId }, workerBody)
-        : assistantMessage({ id, parentId }, [textPart(workerBody)]);
-    });
     await writeSessionFixture({
       dir: sessionDir,
       sessionId: SESSION_ID,
       cwd: project,
       lines: [
-        userMessage({ id: RECORD_ID, parentId: null }, small),
-        assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart(small)]),
+        userMessage({ id: RECORD_ID, parentId: null }, "the retry helper sleeps too little"),
+        assistantMessage({ id: "50000002", parentId: RECORD_ID }, [textPart("raised it to 250ms")]),
       ],
       subagents: [
         {
           name: "Worker",
           sessionId: "aaaa1111-4444-7000-8000-000000000062",
-          lines: workerLines,
+          lines: [userMessage({ id: "60000001", parentId: null }, "check the sleep")],
         },
       ],
     });
 
+    // An earlier evaluation covered the parent trace only — a partial scan, or a subagent trace
+    // written after one. The session is eligible again, for whatever is still open.
+    await Bun.write(
+      paths.decisionsPath,
+      `${JSON.stringify(
+        evaluationRecord({
+          sessionId: SESSION_ID,
+          sessionFile: path.join(sessionDir, "seed.jsonl"),
+          traceSessionIds: [SESSION_ID],
+          outcome: "lessons",
+          verdict: "the parent only",
+          promptSha256: "seed",
+        }),
+      )}\n`,
+    );
+
     const { api, commands, created } = harness({ evaluate: true, agentDir });
     distillExtension(api);
-    const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir, models: [{ provider: "deepseek", id: "tiny", name: "Tiny", contextWindow: 1 }] });
+    const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
-    const first = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
+    const output = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
 
-    // The fitting trace was evaluated; the unsendable one was named and left alone.
     expect(created).toHaveLength(1);
-    expect(first).toContain("exceed what the evaluator's model can take");
-    expect(first).toContain("the other 1 trace(s) are evaluated now");
-    expect(first).toContain("1 lesson(s) proposed");
+    expect(output).toContain("1 trace(s), 1 already evaluated");
+    expect(lastPayload?.match(/## trace /g)).toHaveLength(1);
+    expect(lastPayload).toContain("## trace aaaa11114444 — subagent Worker");
+    // No block for the covered parent trace (its id still names the session and the artifact
+    // directory the worker's transcript lives in).
+    expect(lastPayload).not.toContain("## trace aaaa1111 — parent session");
 
     const ledger = await readLedger(paths);
-    const evaluations = ledger.filter(record => record.kind === "evaluation");
-    expect(evaluations).toHaveLength(2);
-    // The unsendable trace is recorded first, then the runs that did happen.
-    expect(evaluations.map(record => (record.kind === "evaluation" ? record.outcome : ""))).toEqual(["failed", "lessons"]);
-    const failed = evaluations.find(record => record.kind === "evaluation" && record.outcome === "failed");
-    expect(failed?.kind === "evaluation" ? failed.traceSessionIds : []).toEqual(["aaaa1111-4444-7000-8000-000000000062"]);
-
-    // The parent trace is retired now, so a second scan sends nothing for it: it stops at the
-    // trace that still does not fit rather than re-paying for the one already covered.
-    const before = created.length;
-    const second = await captureStdout(() => commands.distill!.handler("scan --limit 1", ctx));
-    expect(created).toHaveLength(before);
-    expect(second).toContain("nothing can be sent for them");
+    expect(ledger.filter(record => record.kind === "evaluation")).toHaveLength(2);
   });
 
   test("a dry run prints the payload and writes nothing", async () => {
@@ -490,7 +489,10 @@ describe("the distill command", () => {
     const output = await captureStdout(() => commands.distill!.handler("scan --dry-run", ctx));
 
     expect(output).toContain("# distill payload");
-    expect(output).toContain(`[${RECORD_ID}] user: the retry helper sleeps too little`);
+    expect(output).toContain("records 1..");
+    expect(output).toContain(`session ${SESSION_ID}`);
+    // The dry run shows what a scan sends: the inventory, not the records.
+    expect(output).not.toContain("the retry helper sleeps too little");
     expect(notifications).toEqual([]);
     expect(await listLessons(paths)).toEqual([]);
     expect(await readLedger(paths)).toEqual([]);

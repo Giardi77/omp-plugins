@@ -42,9 +42,11 @@ and a `tmp/` ignore rule. Then:
 and calls no model, and `/distill scan --session <id>` evaluates one session without choosing.
 Scans are serialized: two cannot run at once in one project.
 
-The payload is a digest, not a transcript dump: prompts, assistant text and tool calls in full (capped
-per record), tool results as their first line plus size, and each trace's transcript path so the
-evaluator can read any record itself. Cited evidence is still extracted verbatim from the record.
+The evaluator is handed an **inventory** of the session's traces — each one's id, record range, size
+and transcript file — and reads the records itself with `get_trace`: a section at a time, by range, by
+pattern, or with a `jq` query over that trace's records. Sections render prompts, assistant text and
+tool calls in full (capped per record) and tool results as their first line plus size; cited evidence
+is still extracted verbatim from the full record.
 
 A session whose whole bundle is larger than the evaluator's model can take is evaluated in as few runs
 as the budget allows — the parent first, then each subagent — so a 3 MB transcript still yields lessons instead

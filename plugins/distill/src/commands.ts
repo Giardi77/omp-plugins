@@ -30,7 +30,7 @@ import {
 import { runReview, type ReviewEntry } from "./review";
 import { listProjectSessions, sessionTraceIds, type SessionCandidate } from "./store";
 import { CLI_THINKING_LEVELS, parseCliThinkingLevel } from "./thinking";
-import { renderPayload, type TraceBundle } from "./trace";
+import { renderInventory, type TraceBundle } from "./trace";
 import { fileExists, messageOf } from "./util";
 import { applyWrite, planWrite, readInventory } from "./writer";
 
@@ -422,7 +422,7 @@ async function scanOne(
 
   if (flags.dryRun) {
     // The dry run prints what a scan would send, one payload per planned evaluation.
-    for (const group of plan.groups) showPayload(ctx, renderPayload(group, renderOptions));
+    for (const group of plan.groups) showPayload(ctx, renderInventory(group, renderOptions));
     if (plan.oversized.length > 0) {
       notify(ctx, oversizedNotice(session.sessionId, plan.oversized, budget), "warning");
     }
@@ -484,7 +484,7 @@ async function scanOne(
       paths,
       config,
       bundle: group,
-      payload: renderPayload(group, renderOptions),
+      payload: renderInventory(group, renderOptions),
       evaluatorPrompt: evaluator.text,
       modelRegistry: ctx.modelRegistry,
       ...(model.model === undefined ? {} : { model: model.model }),
@@ -519,7 +519,7 @@ async function scanOne(
     );
 
     if (run.status === "failed") {
-      const dump = await writeFailureDump(paths, session, run.reason ?? "unknown", renderPayload(group, renderOptions), run.reads);
+      const dump = await writeFailureDump(paths, session, run.reason ?? "unknown", renderInventory(group, renderOptions), run.reads);
       failures.push(`${run.traceSessionIds.join(", ")}: ${run.reason} (${path.relative(paths.projectRoot, dump)})`);
       continue;
     }

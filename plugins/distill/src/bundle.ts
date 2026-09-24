@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadSession, resolveBranch, subagentSessionFiles } from "./store";
-import { buildBundle, renderPayload, type TraceBundle, type TraceRenderOptions } from "./trace";
+import { buildBundle, renderInventory, type TraceBundle, type TraceRenderOptions } from "./trace";
 
 /**
  * Assembles the payload source for one session: the parent trace plus every subagent
@@ -30,19 +30,19 @@ export function planEvaluations(
   budgetChars: number,
   options: TraceRenderOptions,
 ): EvaluationPlan {
-  if (renderPayload(bundle, options).length <= budgetChars) return { groups: [bundle], oversized: [] };
+  if (renderInventory(bundle, options).length <= budgetChars) return { groups: [bundle], oversized: [] };
 
   // The payload is additive — one header, then each trace's records — so a greedy pack over the
   // traces needs each trace's own size and the header's, and nothing else. Packing matters: a
   // bundle 12% over the budget should cost two runs, not one per trace.
-  const headerChars = renderPayload({ ...bundle, traces: [] }, options).length;
+  const headerChars = renderInventory({ ...bundle, traces: [] }, options).length;
   const oversized: Array<{ traceId: string; sessionId: string; chars: number }> = [];
   const groups: TraceBundle[] = [];
   let current: TraceBundle["traces"] = [];
   let used = headerChars;
 
   for (const trace of bundle.traces) {
-    const chars = renderPayload({ ...bundle, traces: [trace] }, options).length;
+    const chars = renderInventory({ ...bundle, traces: [trace] }, options).length;
     const body = chars - headerChars;
     if (chars > budgetChars) {
       oversized.push({ traceId: trace.id, sessionId: trace.sessionId, chars });

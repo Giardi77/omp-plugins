@@ -126,10 +126,11 @@ export function buildBundle(input: {
 }
 
 /**
- * The payload: the session's traces and nothing else (D17). The evaluator finds the
- * project's own skills and prompts with its tools; the trace carries only what happened.
+ * The payload: an inventory of the session's traces — each one's id, label, record range, size
+ * and transcript file — and no records (ADR-0013). Records are read with `get_trace`, a bounded
+ * section at a time, so a scan never hands the evaluator more than it asked to see.
  */
-export function renderPayload(bundle: TraceBundle, options: TraceRenderOptions): string {
+export function renderInventory(bundle: TraceBundle, options: TraceRenderOptions): string {
   const lines: string[] = [];
   lines.push("# distill payload");
   lines.push("");
@@ -139,17 +140,124 @@ export function renderPayload(bundle: TraceBundle, options: TraceRenderOptions):
   lines.push("");
 
   for (const trace of bundle.traces) {
-    lines.push(`## trace ${trace.id} — ${trace.label}`);
-    lines.push(`session ${trace.sessionId}, ${trace.records.length} records`);
-    lines.push(`file ${trace.sessionFile}`);
-    lines.push("");
-    for (const record of trace.records) {
-      for (const line of renderRecord(record, options)) lines.push(`[${record.id}] ${line}`);
-    }
+    lines.push(...renderTraceHeader(trace));
+    lines.push(`chars ${traceChars(trace, options)}`);
     lines.push("");
   }
 
   return lines.join("\n");
+}
+
+/** One trace's block: who it is, how many records it holds, and where they live. */
+function renderTraceHeader(trace: Trace): string[] {
+  return [
+    `## trace ${trace.id} — ${trace.label}`,
+    `session ${trace.sessionId}`,
+    `file ${trace.sessionFile}`,
+    `records 1..${trace.records.length}`,
+  ];
+}
+
+/** Characters this trace's records render to. CPU only: the number never enters a context. */
+export function traceChars(trace: Trace, options: TraceRenderOptions): number {
+  return trace.records.reduce((total, record) => total + renderRecord(record, options).join("\n").length, 0);
+}
+
+export const DEFAULT_SECTION_RECORDS = 60;
+export const MAX_SECTION_RECORDS = 200;
+/** A section stops here even with records to spare: more is one call away. */
+export const MAX_SECTION_CHARS = 40_000;
+
+export interface SectionRequest {
+  /** 1-based ordinal of the first record to return. */
+  from?: number;
+  /** Inclusive last ordinal; default is the far end of the trace. */
+  to?: number;
+  /** Case-insensitive substring; when given, only matching records are returned. */
+  pattern?: string;
+  limit?: number;
+}
+
+export interface TraceSection {
+  text: string;
+  /** 1-based ordinals of the records actually returned; 0 when nothing was. */
+  first: number;
+  last: number;
+  /** How many records the trace holds, and how many matched the pattern. */
+  total: number;
+  matched: number;
+  truncated: boolean;
+}
+
+/**
+ * One section of one trace, rendered exactly as the payload used to render a whole trace: the
+ * same exclusions, the same caps, the same record ids a citation needs.
+ */
+export function renderTraceSection(
+  trace: Trace,
+  options: TraceRenderOptions,
+  request: SectionRequest = {},
+): TraceSection {
+  const limit = Math.max(1, Math.min(request.limit ?? DEFAULT_SECTION_RECORDS, MAX_SECTION_RECORDS));
+  const pattern = request.pattern?.trim().toLowerCase();
+  const wanted = trace.records
+    .map((record, index) => ({
+      record,
+      ordinal: index + 1,
+      body: renderRecord(record, options).map(line => `[${record.id}] ${line}`),
+    }))
+    .filter(entry => pattern === undefined || entry.body.join("\n").toLowerCase().includes(pattern));
+
+  const from = Math.max(1, request.from ?? 1);
+  const selected = wanted.filter(
+    entry => entry.ordinal >= from && (request.to === undefined || entry.ordinal <= request.to),
+  );
+
+  const lines: string[] = [...renderTraceHeader(trace)];
+  if (pattern !== undefined) lines.push(`pattern "${request.pattern?.trim()}" — ${wanted.length} match(es)`);
+
+  let chars = 0;
+  let last = 0;
+  let shown = 0;
+  let truncated = false;
+  for (const entry of selected) {
+    const size = entry.body.join("\n").length + 1;
+    if (shown >= limit || (shown > 0 && chars + size > MAX_SECTION_CHARS)) {
+      truncated = true;
+      break;
+    }
+    lines.push(...entry.body);
+    chars += size;
+    shown += 1;
+    last = entry.ordinal;
+  }
+
+  lines.push("");
+  if (shown === 0) {
+    lines.push(pattern !== undefined && wanted.length === 0 ? "nothing matched" : "no records in that range");
+    return {
+      text: lines.join("\n"),
+      first: 0,
+      last: 0,
+      total: trace.records.length,
+      matched: wanted.length,
+      truncated: false,
+    };
+  }
+
+  const first = selected[0]?.ordinal ?? 0;
+  lines.push(
+    `section: records ${first}..${last} of ${trace.records.length}${pattern === undefined ? "" : ` (${wanted.length} matched)`}`,
+  );
+  // Look past what was asked for: "end of what you asked for" must not read as "end of trace".
+  const next = wanted.find(entry => entry.ordinal > last);
+  const continuation = `get_trace trace="${trace.id}"${pattern === undefined ? "" : ` pattern="${request.pattern?.trim()}"`} from=`;
+  lines.push(
+    next === undefined
+      ? "end of what you asked for"
+      : `${truncated ? "section limit reached; " : ""}next: ${continuation}${next.ordinal}`,
+  );
+  return { text: lines.join("\n"), first, last, total: trace.records.length, matched: wanted.length, truncated };
 }
 
 /** The record's own text, as the evaluator sees it: no record id, capped per part. */

@@ -1,6 +1,15 @@
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { isValidManagedSkillName } from "./skill-rules";
-import { excerptFor, type Trace, type TraceBundle, type TraceRenderOptions } from "./trace";
+import { JQ_DEFAULT_MAX_CHARS } from "./jq";
+import {
+  DEFAULT_SECTION_RECORDS,
+  excerptFor,
+  MAX_SECTION_CHARS,
+  MAX_SECTION_RECORDS,
+  type Trace,
+  type TraceBundle,
+  type TraceRenderOptions,
+} from "./trace";
 
 /**
  * The answer contract: the plugin-owned shape of the evaluator's answer — the
@@ -14,6 +23,7 @@ import { excerptFor, type Trace, type TraceBundle, type TraceRenderOptions } fro
 
 export const ANSWER_CONTRACT_VERSION = 1;
 export const PROPOSE_LESSONS_TOOL = "propose_lessons";
+export const GET_TRACE_TOOL = "get_trace";
 
 /**
  * Where a lesson can be written. Each kind names one OMP surface, and `target` names the
@@ -57,8 +67,8 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `verdict: one line stating what this session taught, or why nothing in it is worth keeping.`,
   `lessons: the lessons worth keeping, or [] when the session teaches nothing reusable. One lesson is one durable instruction for future agent sessions in this project.`,
   ``,
-  `Evidence. Every lesson cites records from the payload, as \`trace:record\`, copying both ids from the brackets. A citation that does not resolve is rejected with an error and you are asked again: invented evidence never reaches review. Never quote text into the body — the plugin extracts the cited records' own text verbatim, so the body stays a statement of the lesson.`,'',
-  `Tool results are summarised: their first line and total size, not their output. Each trace names the transcript file it came from, so read that file (or grep for a record id) when a result's detail decides a lesson.`,
+  `Evidence. Every lesson cites records you read with \`get_trace\`, as \`trace:record\` — the trace id from the payload, the record id from the section's brackets. A citation that does not resolve against the session is rejected with an error and you are asked again: invented evidence never reaches review. Never quote text into the body — the plugin extracts the cited records' own text verbatim, so the body stays a statement of the lesson.`,'',
+  `Tool results are summarised: their first line and total size, not their output. Each trace names the transcript file on disk; its records are the session's own words, so prefer reading them with \`get_trace\` over pulling a whole transcript.`,
   ``,
   `Where a lesson goes. Pick the narrowest surface that will hold it, and edit before you add:`,
   `a file that already says something close is patched, never duplicated.`,
@@ -88,6 +98,43 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   ``,
   `Before proposing anything, read .omp/distill/lessons/ — a lesson already denied for the same proposal must not be proposed again.`,
 ].join("\n");
+
+export const GET_TRACE_DESCRIPTION = [
+  `Read a section of one of the session's traces: by record range, or by pattern. The payload is an inventory — each trace with the records it holds, its size and its file — and this tool is how the records themselves are read. Nothing else is rendered for you.`,
+  ``,
+  `- trace — the id from a "## trace <id>" line in the payload.`,
+  `- from / to — 1-based record ordinals, inclusive. With neither, reading starts at record 1.`,
+  `- pattern — case-insensitive substring; only matching records come back, and "from" then counts matches.`,
+  `- limit — records per call: ${DEFAULT_SECTION_RECORDS} by default, at most ${MAX_SECTION_RECORDS}.`,
+  `- jq — a jq filter run over that trace's records, one JSON record per line, after branch resolution. Use it for exact structure that a rendered section only summarises:`,
+  `    all calls to one tool:      [.message.content[]? | select(.type=="toolCall") | select(.name=="edit") | .arguments.path]`,
+  `    every prompt:               select(.message.role=="user") | .message.content[]?.text`,
+  `    how many results failed:    [select(.message.isError == true)] | length`,
+  `  Its output is capped at ${JQ_DEFAULT_MAX_CHARS} characters and a filter that runs long is stopped; jq's module loader is disabled, so include/import will not work.`,
+  ``,
+  `A section stops at ${MAX_SECTION_CHARS} characters or at the record limit — whichever comes first — and says where to continue, so read as much as the judgement needs and no more. Every section line carries the record's id in brackets: those are the ids a lesson cites, and a lesson may only cite records you have actually read.`,
+].join("\n");
+
+export const GET_TRACE_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["trace"],
+  properties: {
+    trace: { type: "string", description: 'The trace id from the payload, e.g. "01a0d2ea".' },
+    from: { type: "number", description: "First record ordinal to return (1-based)." },
+    to: { type: "number", description: "Last record ordinal to return, inclusive." },
+    pattern: { type: "string", description: "Case-insensitive substring; only matching records are returned." },
+    jq: {
+      type: "string",
+      description:
+        'A jq filter over that trace\'s records (one JSON per line), e.g. \'[.message.content[]? | select(.type=="toolCall") | .name]\'. Exact extraction; output is capped.',
+    },
+    limit: {
+      type: "number",
+      description: `Records per call (default ${DEFAULT_SECTION_RECORDS}, max ${MAX_SECTION_RECORDS}).`,
+    },
+  },
+};
 
 export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
   type: "object",
