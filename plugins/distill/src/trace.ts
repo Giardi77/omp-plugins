@@ -234,7 +234,14 @@ export function renderTraceSection(
 
   lines.push("");
   if (shown === 0) {
-    lines.push(pattern !== undefined && wanted.length === 0 ? "nothing matched" : "no records in that range");
+    const firstMatch = wanted[0]?.ordinal;
+    lines.push(
+      pattern === undefined
+        ? "no records in that range"
+        : wanted.length === 0
+          ? "nothing matched"
+          : `no matches from record ${from} on — ${wanted.length} matched earlier, the first at record ${firstMatch}`,
+    );
     return {
       text: lines.join("\n"),
       first: 0,

@@ -30,6 +30,8 @@ own still fails loudly with its size and stays eligible; no payload is ever trun
 `/distill status` can report "N traces were evaluated under an earlier `evaluator.md`" — a prompt
 edit's coverage becomes visible without anything re-running. A payload too large for the model is a
 technical fault and therefore stays eligible: it fails loudly and visibly rather than being truncated
-silently, which is the predecessor's failure mode; splitting an oversized session by trace is the
-recorded upgrade path if a real session ever hits the limit. Retirement is measured per **trace**, not
+silently, which is the predecessor's failure mode. (Amended by ADR-0013: the payload is an inventory of
+traces rather than their records, so the split-by-trace upgrade path and the payload planner were
+deleted in 0.4.0 — a session with thousands of traces now fails on the provider's own size error, which
+the run reports verbatim.) Retirement is measured per **trace**, not
 per session, so a session evaluated in more than one pass retires only when every trace is covered.

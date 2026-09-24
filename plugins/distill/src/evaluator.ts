@@ -38,27 +38,6 @@ export type EvaluatorModelRegistry = NonNullable<CreateAgentSessionOptions["mode
 
 export const EVALUATOR_TOOL_NAMES: readonly string[] = ["read", "glob", "grep", GET_TRACE_TOOL, PROPOSE_LESSONS_TOOL];
 
-/** Conservative characters per token: a measured trace ran ~3.3, and underestimating splits early. */
-export const CHARS_PER_TOKEN = 3;
-/** Head-room for the system prompt, the tool description and tokenizer drift. */
-export const PROMPT_SAFETY_TOKENS = 8_000;
-/** Used when the host cannot say what the model's window is. */
-export const DEFAULT_PAYLOAD_BUDGET_CHARS = 400_000;
-
-/**
- * How much payload one evaluation may carry: the model's window minus the completion it
- * reserves, since a thinking model that reserves half the window cannot take a full one.
- */
-export function payloadBudgetChars(
-  model: { contextWindow?: number | null; maxTokens?: number | null } | undefined,
-): number {
-  const window = model?.contextWindow ?? 0;
-  if (!Number.isFinite(window) || window <= 0) return DEFAULT_PAYLOAD_BUDGET_CHARS;
-  const declared = model?.maxTokens ?? 0;
-  const reserve = Math.min(declared > 0 ? declared : Math.floor(window / 4), Math.floor(window / 2));
-  return Math.max(20_000, (window - reserve - PROMPT_SAFETY_TOKENS) * CHARS_PER_TOKEN);
-}
-
 export class ToolSurfaceMismatch extends Error {
   readonly unexpected: string[];
   readonly missing: string[];
@@ -217,6 +196,7 @@ export async function readTrace(
   params: unknown,
   bundle: TraceBundle,
   options: TraceRenderOptions,
+  signal?: AbortSignal,
 ): Promise<string> {
   const request = isRecord(params) ? params : {};
   const wanted = typeof request.trace === "string" ? request.trace.trim() : "";
@@ -227,7 +207,7 @@ export async function readTrace(
   }
 
   if (typeof request.jq === "string" && request.jq.trim() !== "") {
-    const result = await runJq(request.jq, trace.records);
+    const result = await runJq(request.jq, trace.records, signal === undefined ? {} : { signal });
     return result.ok
       ? `jq ${request.jq.trim()} over trace ${trace.id} (${trace.records.length} records)\n${result.output}`
       : `jq could not answer that: ${result.error}`;
@@ -306,7 +286,7 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
     description: GET_TRACE_DESCRIPTION,
     parameters: GET_TRACE_PARAMETERS,
     async execute(_toolCallId, params) {
-      return { content: [{ type: "text", text: await readTrace(params, input.bundle, renderOptions) }] };
+      return { content: [{ type: "text", text: await readTrace(params, input.bundle, renderOptions, input.signal) }] };
     },
   };
 

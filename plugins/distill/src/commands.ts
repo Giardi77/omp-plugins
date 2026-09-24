@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils";
-import { loadTraceBundle, planEvaluations } from "./bundle";
+import { loadTraceBundle } from "./bundle";
 import {
   distillPaths,
   readConfig,
@@ -13,7 +13,7 @@ import {
   type DistillPaths,
 } from "./config";
 import { ANSWER_CONTRACT_VERSION } from "./contract";
-import { payloadBudgetChars, runEvaluation, type EvaluatorModel } from "./evaluator";
+import { runEvaluation, type EvaluatorModel } from "./evaluator";
 import {
   appendLedger,
   decideLesson,
@@ -417,146 +417,78 @@ async function scanOne(
   }
 
   const renderOptions = { includeThinking: config.include_thinking };
-  const budget = payloadBudgetChars(model.model);
-  const plan = planEvaluations(pending, budget, renderOptions);
+  const payload = renderInventory(pending, renderOptions);
 
   if (flags.dryRun) {
-    // The dry run prints what a scan would send, one payload per planned evaluation.
-    for (const group of plan.groups) showPayload(ctx, renderInventory(group, renderOptions));
-    if (plan.oversized.length > 0) {
-      notify(ctx, oversizedNotice(session.sessionId, plan.oversized, budget), "warning");
-    }
+    // The dry run prints exactly what a scan would send: the inventory is the whole payload.
+    showPayload(ctx, payload);
     return;
   }
 
-  // A trace too big to send is reported and left eligible, but never blocks the traces that
-  // do fit: the evaluation continues with whatever the model can take.
-  if (plan.oversized.length > 0) {
-    const reason = oversizedNotice(session.sessionId, plan.oversized, budget);
-    await appendLedger(
-      paths,
-      evaluationRecord({
-        sessionId: session.sessionId,
-        sessionFile: session.path,
-        traceSessionIds: plan.oversized.map(entry => entry.sessionId),
-        outcome: "failed",
-        reason,
-        promptSha256: evaluator.sha256,
-        ...(model.spec === undefined ? {} : { model: model.spec }),
-      }),
-    );
-    // Nothing to quote: the payload is exactly what could not be sent, so the dump carries
-    // the sizes that made it unsendable.
-    const dump = await writeFailureDump(paths, session, reason, "", [], { oversized: plan.oversized });
-    const rest =
-      plan.groups.length > 0
-        ? `the other ${plan.groups.length} trace(s) are evaluated now`
-        : "nothing can be sent for them";
-    notify(
-      ctx,
-      `${reason} — ${rest}; they stay eligible and nothing was truncated. A dump is in ${path.relative(paths.projectRoot, dump)}.`,
-      "error",
-    );
-  }
-
-  if (plan.groups.length === 0) return;
-
-  const split = plan.groups.length > 1;
   notify(
     ctx,
-    `Evaluating ${describeSession(session)} (${pending.traces.length} trace(s)${covered > 0 ? `, ${covered} already evaluated` : ""}${split ? `, ${plan.groups.length} runs — the session is bigger than ${Math.round(budget / 1000)}k characters, so it is split by trace` : ""}) — this can take a while.`,
+    `Evaluating ${describeSession(session)} (${pending.traces.length} trace(s)${covered > 0 ? `, ${covered} already evaluated` : ""}) — this can take a while.`,
     "info",
   );
 
-  const failures: string[] = [];
-  const lessonIds: string[] = [];
-  let proposed = 0;
-  let duplicates = 0;
-  let lastVerdict = "";
+  const run = await runEvaluation({
+    sdk: pi.pi,
+    paths,
+    config,
+    bundle: pending,
+    payload,
+    evaluatorPrompt: evaluator.text,
+    modelRegistry: ctx.modelRegistry,
+    ...(model.model === undefined ? {} : { model: model.model }),
+    signal,
+  });
 
-  for (const group of plan.groups) {
-    if (signal.aborted) {
-      failures.push("cancelled before this trace was sent");
-      break;
-    }
-    const run = await runEvaluation({
-      sdk: pi.pi,
-      paths,
-      config,
-      bundle: group,
-      payload: renderInventory(group, renderOptions),
-      evaluatorPrompt: evaluator.text,
-      modelRegistry: ctx.modelRegistry,
-      ...(model.model === undefined ? {} : { model: model.model }),
-      signal,
-    });
+  const saved =
+    run.status === "lessons"
+      ? await saveProposals(paths, run.proposals, {
+          sessionId: session.sessionId,
+          traceSessionIds: run.traceSessionIds,
+          contractVersion: ANSWER_CONTRACT_VERSION,
+          promptSha256: evaluator.sha256,
+          ...(model.spec === undefined ? {} : { model: model.spec }),
+        })
+      : { created: [], duplicates: [] };
 
-    const saved =
-      run.status === "lessons"
-        ? await saveProposals(paths, run.proposals, {
-            sessionId: session.sessionId,
-            traceSessionIds: run.traceSessionIds,
-            contractVersion: ANSWER_CONTRACT_VERSION,
-            promptSha256: evaluator.sha256,
-            ...(model.spec === undefined ? {} : { model: model.spec }),
-          })
-        : { created: [], duplicates: [] };
-
-    await appendLedger(
-      paths,
-      evaluationRecord({
-        sessionId: session.sessionId,
-        sessionFile: session.path,
-        traceSessionIds: run.traceSessionIds,
-        outcome: run.status,
-        ...(run.reason === undefined ? {} : { reason: run.reason }),
-        verdict: run.verdict,
-        lessonIds: saved.created.map(lesson => lesson.id),
-        ...(model.spec === undefined ? {} : { model: model.spec }),
-        promptSha256: evaluator.sha256,
-        reads: run.reads,
-      }),
-    );
-
-    if (run.status === "failed") {
-      const dump = await writeFailureDump(paths, session, run.reason ?? "unknown", renderInventory(group, renderOptions), run.reads);
-      failures.push(`${run.traceSessionIds.join(", ")}: ${run.reason} (${path.relative(paths.projectRoot, dump)})`);
-      continue;
-    }
-    proposed += saved.created.length;
-    duplicates += saved.duplicates.length;
-    lessonIds.push(...saved.created.map(lesson => lesson.id));
-    lastVerdict = run.verdict;
-  }
+  await appendLedger(
+    paths,
+    evaluationRecord({
+      sessionId: session.sessionId,
+      sessionFile: session.path,
+      traceSessionIds: run.traceSessionIds,
+      outcome: run.status,
+      ...(run.reason === undefined ? {} : { reason: run.reason }),
+      verdict: run.verdict,
+      lessonIds: saved.created.map(lesson => lesson.id),
+      ...(model.spec === undefined ? {} : { model: model.spec }),
+      promptSha256: evaluator.sha256,
+      reads: run.reads,
+    }),
+  );
 
   const warnings = loaded.warnings.length > 0 ? ` (${loaded.warnings.length} subagent trace(s) skipped)` : "";
-  if (failures.length > 0) {
+  if (run.status === "failed") {
+    const dump = await writeFailureDump(paths, session, run.reason ?? "unknown", payload, run.reads);
     notify(
       ctx,
-      `${session.sessionId}: ${failures.length} of ${plan.groups.length} evaluation(s) failed — ${failures.join("; ")}${warnings}. Those traces stay eligible for a retry.`,
+      `${session.sessionId}: the evaluation failed — ${run.reason} (${path.relative(paths.projectRoot, dump)})${warnings}. Its traces stay eligible for a retry.`,
       "error",
     );
-    if (proposed === 0) return;
+    return;
   }
-  if (proposed === 0 && failures.length === 0) {
-    notify(ctx, `${session.sessionId}: nothing worth keeping — ${lastVerdict || "no verdict given"}${warnings}`, "info");
+  if (saved.created.length === 0) {
+    notify(ctx, `${session.sessionId}: nothing worth keeping — ${run.verdict || "no verdict given"}${warnings}`, "info");
     return;
   }
   notify(
     ctx,
-    `${session.sessionId}: ${proposed} lesson(s) proposed in ${plan.groups.length - failures.length} run(s)${duplicates > 0 ? `, ${duplicates} duplicate(s) ignored` : ""}${warnings} — ${lastVerdict}\nRun /distill review to decide.`,
+    `${session.sessionId}: ${saved.created.length} lesson(s) proposed${saved.duplicates.length > 0 ? `, ${saved.duplicates.length} duplicate(s) ignored` : ""}${warnings} — ${run.verdict}\nRun /distill review to decide.`,
     "info",
   );
-}
-
-/** A trace nobody can send: named by size, left eligible, never truncated. */
-function oversizedNotice(
-  sessionId: string,
-  oversized: Array<{ traceId: string; chars: number }>,
-  budgetChars: number,
-): string {
-  const named = oversized.map(entry => `${entry.traceId} (${Math.round(entry.chars / 1000)}k chars)`).join(", ");
-  return `${sessionId}: ${oversized.length} trace(s) exceed what the evaluator's model can take (${Math.round(budgetChars / 1000)}k characters) — ${named}`;
 }
 
 async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {

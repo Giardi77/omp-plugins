@@ -48,11 +48,10 @@ pattern, or with a `jq` query over that trace's records. Sections render prompts
 tool calls in full (capped per record) and tool results as their first line plus size; cited evidence
 is still extracted verbatim from the full record.
 
-A session whose whole bundle is larger than the evaluator's model can take is evaluated in as few runs
-as the budget allows — the parent first, then each subagent — so a 3 MB transcript still yields lessons instead
-of a 400 error. Nothing is ever truncated: a single trace that still does not fit fails loudly,
-names its size, and stays eligible for a retry. A run that fails reports what the provider said
-(`the evaluator's model call failed: …`), and its dump under `tmp/` carries the same reason.
+One session is one evaluation: the parent trace and its subagents in a single run. Nothing is ever
+truncated — a payload the model refuses fails loudly, reports what the provider said
+(`the evaluator's model call failed: …`), and leaves its traces eligible for a retry, with a dump
+under `tmp/` carrying the same reason.
 
 ## What lives where
 

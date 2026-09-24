@@ -41,4 +41,28 @@ describe("jq for the evaluator", () => {
     if (result.ok) return;
     expect(result.error).toContain("could not run jq");
   });
+
+  test("a filter that is still computing dies with the evaluation", async () => {
+    if (!Bun.which("jq")) return;
+    const controller = new AbortController();
+    // Building twenty million numbers keeps jq busy for seconds and prints nothing until it is
+    // done, so the abort is the only thing that can end this run. `runJq` attaches its abort
+    // listener before its first await, so aborting here lands after the spawn, not before it.
+    const pending = runJq("[range(0; 20000000)] | length", records, { signal: controller.signal, timeoutMs: 30_000 });
+    controller.abort();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("cancelled");
+  });
+
+  test("a signal that is already aborted never starts jq", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runJq(".", records, { signal: controller.signal });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("cancelled");
+  });
 });

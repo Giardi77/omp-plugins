@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { loadTraceBundle, planEvaluations } from "../src/bundle";
+import { loadTraceBundle } from "../src/bundle";
 import { renderInventory } from "../src/trace";
 import {
   assistantMessage,
@@ -66,43 +66,6 @@ describe("trace bundles", () => {
     if (!result.ok) return;
     expect(result.bundle.traces).toHaveLength(1);
     expect(result.warnings).toEqual(["Broken.jsonl: no session header found"]);
-  });
-
-  test("a session that fits goes in one payload, and one that does not is split by trace", async () => {
-    const dir = await makeTempDir("omp-distill-bundle-");
-    const projectRoot = "/work/alpha";
-    const sessionPath = await writeSessionFixture({
-      dir,
-      sessionId: "11112222-6666-7000-8000-000000000073",
-      cwd: projectRoot,
-      lines: [userMessage({ id: "80000001", parentId: null }, "x".repeat(4_000))],
-      subagents: [{ name: "Worker", sessionId: "11112222-7777-7000-8000-000000000074", lines: [userMessage({ id: "80000002", parentId: null }, "y".repeat(4_000))] }],
-    });
-
-    const result = await loadTraceBundle({ sessionFile: sessionPath, projectRoot });
-    if (!result.ok) throw new Error(result.reason);
-    const options = { includeThinking: false };
-
-    // The payload is an inventory now, so it is small: two traces come to ~579 characters and a
-    // block per trace to ~330. The planner still guards the window when a session has thousands
-    // of traces, which is what these budgets stand in for.
-    const roomy = planEvaluations(result.bundle, 5_000, options);
-    expect(roomy.groups).toHaveLength(1);
-    expect(roomy.oversized).toEqual([]);
-
-    const tight = planEvaluations(result.bundle, 400, options);
-    expect(tight.groups).toHaveLength(2);
-    expect(tight.groups.map(group => group.traces.length)).toEqual([1, 1]);
-    expect(tight.groups[0]?.traces[0]?.sessionId).toBe("11112222-6666-7000-8000-000000000073");
-    expect(tight.oversized).toEqual([]);
-
-    // A trace whose own inventory block exceeds the budget fits nowhere: named, never truncated.
-    const squeezed = planEvaluations(result.bundle, 100, options);
-    expect(squeezed.groups).toEqual([]);
-    expect(squeezed.oversized).toHaveLength(2);
-    expect(squeezed.oversized[0]?.chars).toBeGreaterThan(100);
-    expect(squeezed.oversized[0]?.traceId).toBe("11112222");
-    expect(squeezed.oversized[0]?.sessionId).toBe("11112222-6666-7000-8000-000000000073");
   });
 
   test("an unreadable parent session is a refusal with a reason", async () => {

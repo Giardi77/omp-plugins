@@ -173,6 +173,14 @@ describe("trace sections", () => {
     expect(nothing.first).toBe(0);
     expect(nothing.text).toContain("nothing matched");
 
+    // The pattern matched, but the window starts after its last match: say that, not "no records
+    // in that range" — the range was fine and the search is what has nothing left.
+    const pastMatch = renderTraceSection(trace, OPTIONS, { pattern: "blocked by user policy", from: 99 });
+    expect(pastMatch.first).toBe(0);
+    expect(pastMatch.matched).toBe(1);
+    expect(pastMatch.text).toContain("no matches from record 99 on");
+    expect(pastMatch.text).toContain("1 matched earlier");
+
     const past = renderTraceSection(trace, OPTIONS, { from: 99 });
     expect(past.first).toBe(0);
     expect(past.text).toContain("no records in that range");

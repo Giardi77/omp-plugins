@@ -11,6 +11,8 @@ export interface JqOptions {
   maxChars?: number;
   /** Injectable for tests; defaults to the `jq` on PATH. */
   jqPath?: string;
+  /** The evaluation's own cancel: a filter such as `until(true; .)` never exits by itself. */
+  signal?: AbortSignal;
 }
 
 export type JqResult =
@@ -28,6 +30,7 @@ export async function runJq(filter: string, records: readonly unknown[], options
 
   const maxChars = options.maxChars ?? JQ_DEFAULT_MAX_CHARS;
   const timeoutMs = options.timeoutMs ?? JQ_DEFAULT_TIMEOUT_MS;
+  if (options.signal?.aborted) return { ok: false, error: "the evaluation was cancelled" };
   const stdin = records.map(record => `${JSON.stringify(record)}\n`).join("");
 
   let process_: Bun.Subprocess<Blob, "pipe", "pipe">;
@@ -45,10 +48,16 @@ export async function runJq(filter: string, records: readonly unknown[], options
   }
 
   let timedOut = false;
+  let cancelled = false;
   const timer = setTimeout(() => {
     timedOut = true;
     process_.kill();
   }, timeoutMs);
+  const onAbort = () => {
+    cancelled = true;
+    process_.kill();
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
 
   const chunks: string[] = [];
   let chars = 0;
@@ -72,11 +81,13 @@ export async function runJq(filter: string, records: readonly unknown[], options
     }
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
   }
 
   const stderr = (await new Response(process_.stderr).text()).trim();
   await process_.exited;
 
+  if (cancelled) return { ok: false, error: "jq was stopped: the evaluation was cancelled" };
   if (timedOut) return { ok: false, error: `jq exceeded ${Math.round(timeoutMs / 1000)}s and was stopped` };
   if (stderr !== "" && chars === 0) return { ok: false, error: `jq: ${stderr.split("\n")[0]}` };
 
