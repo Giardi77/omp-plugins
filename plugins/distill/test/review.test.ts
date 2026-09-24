@@ -81,7 +81,6 @@ function lesson(id: string, overrides: Partial<StoredLesson> = {}): StoredLesson
 function entry(id: string, overrides: Partial<ReviewEntry> = {}): ReviewEntry {
   return {
     lesson: lesson(id),
-    preview: `Body of ${id}.\n`,
     ...overrides,
   };
 }
@@ -98,7 +97,8 @@ interface Sit extends Pending {
   listed(): string[];
 }
 
-function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}): Sit {
+/** Rows the window is told it has: enough for the detail pane unless a test wants the cap. */
+function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}, rows = 80): Sit {
   const pending = pendingDecisions();
   const accepted: StoredLesson[] = [];
   const denied: [string, string | undefined][] = [];
@@ -126,6 +126,7 @@ function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}): S
         return pending.track(decision);
       },
     },
+    { rows },
   );
 
   return {
@@ -428,7 +429,6 @@ describe("ReviewWindow", () => {
         body: "a lesson body ".repeat(60),
         citations: [{ citation: "trace-one#record-1", excerpt: "an excerpt ".repeat(120) }],
       }),
-      preview: Array.from({ length: 40 }, (_, index) => `preview line ${index}`).join("\n"),
       blocked: "the target skill is 4000 bytes over the cap",
     });
     const review = sit([long]);
@@ -438,6 +438,23 @@ describe("ReviewWindow", () => {
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
+  });
+
+  test("a frame taller than the terminal budgets the detail pane instead of overflowing", () => {
+    const tall = entry("one", {
+      lesson: lesson("one", { body: Array.from({ length: 40 }, (_unused, index) => `body line ${index}`).join("\n") }),
+    });
+
+    const roomy = sit([tall], {}, 80);
+    expect(roomy.text()).toContain("body line 39");
+
+    const tight = sit([tall], {}, 24);
+    const rendered = tight.text();
+    // The pane keeps what it can and says where the rest is, and the frame never outgrows the rows
+    // it was told it has: the panel renders every line it is handed, so an over-tall window is one
+    // whose top is off-screen.
+    expect(rendered).toContain("more line(s) — c reads the whole change");
+    expect(tight.window.render(WIDTH).length).toBeLessThanOrEqual(24);
   });
 
   test("shows a lesson's change as a diff of the file it writes", () => {
@@ -452,6 +469,7 @@ describe("ReviewWindow", () => {
               { kind: "added", number: 2, text: "name: tests-from-packages-core" },
             ],
             added: 2,
+            removed: 0,
             context: 0,
           },
         ],
@@ -469,8 +487,8 @@ describe("ReviewWindow", () => {
 
   test("the recap names the batch before anything is read", () => {
     const review = sit([
-      entry("one", { changes: [{ path: ".omp/rules/a.md", mode: "create", lines: [], added: 0, context: 0 }] }),
-      entry("two", { changes: [{ path: ".omp/skills/retry-helper/SKILL.md", mode: "append", lines: [], added: 0, context: 0 }] }),
+      entry("one", { changes: [{ path: ".omp/rules/a.md", mode: "create", lines: [], added: 0, removed: 0, context: 0 }] }),
+      entry("two", { changes: [{ path: ".omp/skills/retry-helper/SKILL.md", mode: "append", lines: [], added: 0, removed: 0, context: 0 }] }),
       entry("three", { blocked: "the target skill is gone" }),
     ]);
     const rendered = review.text();
@@ -483,10 +501,10 @@ describe("ReviewWindow", () => {
   test("c reads every change in the batch on one screen, and goes back", () => {
     const review = sit([
       entry("one", {
-        changes: [{ path: ".omp/rules/one.md", mode: "create", lines: [{ kind: "added", number: 1, text: "one" }], added: 1, context: 0 }],
+        changes: [{ path: ".omp/rules/one.md", mode: "create", lines: [{ kind: "added", number: 1, text: "one" }], added: 1, removed: 0, context: 0 }],
       }),
       entry("two", {
-        changes: [{ path: ".omp/rules/two.md", mode: "create", lines: [{ kind: "added", number: 1, text: "two" }], added: 1, context: 0 }],
+        changes: [{ path: ".omp/rules/two.md", mode: "create", lines: [{ kind: "added", number: 1, text: "two" }], added: 1, removed: 0, context: 0 }],
       }),
     ]);
 

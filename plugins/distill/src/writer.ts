@@ -31,10 +31,20 @@ import { fileExists } from "./util";
 
 export interface PlannedWrite {
   path: string;
-  /** `create` refuses an existing file; `append` adds after its current bytes. */
-  mode: "create" | "append";
-  /** The exact bytes the write contributes. */
+  /**
+   * `create` refuses an existing file, `append` adds after its current bytes, and `splice` takes
+   * lines out of one — a surface that has grown past what a session needs is worth trimming, and
+   * the plugin's own review is the only place that can be approved.
+   */
+  mode: "create" | "append" | "splice";
+  /** The bytes the write contributes; empty for a pure removal. */
   text: string;
+  /**
+   * `splice` only: the lines to take out, as the lesson quoted them. Matched against the file's own
+   * lines with whitespace trimmed at both ends, so a lesson that quotes a paragraph does not have to
+   * reproduce its indentation byte for byte; the lines actually removed are the file's.
+   */
+  remove?: string;
   /** The loader's cap, for the files it applies to. */
   capBytes?: number;
 }
@@ -49,8 +59,6 @@ export interface WritePlan {
   target: string;
   /** The files this approval writes, in order. */
   writes: PlannedWrite[];
-  /** The text the writes add, labelled per file when an approval touches two. */
-  preview: string;
 }
 
 export function skillRoot(paths: DistillPaths): string {
@@ -71,13 +79,96 @@ export function ruleRoot(paths: DistillPaths): string {
  * description that sanitizes to nothing, a rule whose trigger contradicts the one on disk.
  */
 export type WritableLesson = Pick<StoredLesson, "title" | "body" | "target" | "id" | "provenance"> &
-  Partial<Pick<StoredLesson, "applies_to">> & { kind: string };
+  Partial<Pick<StoredLesson, "applies_to" | "removes">> & { kind: string };
 
 export async function planWrite(
   paths: DistillPaths,
   lesson: WritableLesson,
   now: Date = new Date(),
 ): Promise<WritePlan> {
+  const plan = await planAddition(paths, lesson, now);
+  const removes = lesson.removes?.trim();
+  if (removes === undefined || removes === "") return plan;
+
+  // A trim applies to the lesson's own file: for a reference that is the reference, for everything
+  // else it is the surface the lesson is about.
+  const index = lesson.kind === "skill_reference" ? 0 : 0;
+  const target = plan.writes[index];
+  if (target === undefined) return plan;
+  return { ...plan, writes: await spliceWrite(target, removes, lesson.body) };
+}
+
+/**
+ * Turns one append (or a create that never happened) into a splice: the quoted lines come out, the
+ * lesson's body — if it has one — goes where they were.
+ */
+async function spliceWrite(write: PlannedWrite, removes: string, body: string): Promise<PlannedWrite[]> {
+  if (write.mode === "create") {
+    throw new Error(
+      `${write.path} does not exist yet, so there is nothing in it to remove. Propose the file with the lesson's body alone, or point the removal at the file that has the text.`,
+    );
+  }
+  const content = await readText(write.path);
+  if (content === undefined) throw new Error(`${write.path} could not be read, so nothing can be removed from it.`);
+
+  const found = findRemoval(content.split("\n"), removes);
+  if (found === undefined) {
+    throw new Error(
+      `${write.path} does not contain the text this lesson removes, so it may have changed since the session was read. Nothing was written.`,
+    );
+  }
+  if (found.occurrences > 1) {
+    throw new Error(
+      `The text this lesson removes appears ${found.occurrences} times in ${write.path}; quote enough of it to name one place.`,
+    );
+  }
+  return [{ ...write, mode: "splice", remove: found.lines.join("\n"), text: body.trim() === "" ? "" : `${body.trim()}\n` }];
+}
+
+/**
+ * Where a lesson's quoted lines are in a file. Matching trims whitespace at both ends of each line,
+ * so a lesson does not have to reproduce indentation, and skips over the blank lines *inside* a
+ * quoted block while leaving the blank lines at its edges alone — a trim takes the block and leaves
+ * the file's spacing as it was. `lines` are the file's own, so what comes out is what was quoted,
+ * not what the lesson thought it quoted.
+ */
+export function findRemoval(
+  lines: readonly string[],
+  removes: string,
+): { start: number; lines: string[]; occurrences: number } | undefined {
+  const wanted = removes
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line !== "");
+  if (wanted.length === 0) return undefined;
+
+  let start = -1;
+  let found: string[] = [];
+  let occurrences = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const window: string[] = [];
+    for (let cursor = index; window.filter(line => line.trim() !== "").length < wanted.length && cursor < lines.length; cursor++) {
+      window.push(lines[cursor] ?? "");
+    }
+    const quoted = window.map(line => line.trim()).filter(line => line !== "");
+    if (quoted.length !== wanted.length || !quoted.every((line, offset) => line === wanted[offset])) continue;
+
+    occurrences += 1;
+    if (start !== -1) continue;
+    let first = 0;
+    while (first < window.length && (window[first] ?? "").trim() === "") first += 1;
+    let last = window.length;
+    while (last > first && (window[last - 1] ?? "").trim() === "") last -= 1;
+    start = index + first;
+    found = window.slice(first, last);
+    index += last - 1;
+  }
+
+  return start === -1 ? undefined : { start, lines: found, occurrences };
+}
+
+/** What the lesson adds, before any trimming it also asks for. */
+async function planAddition(paths: DistillPaths, lesson: WritableLesson, now: Date): Promise<WritePlan> {
   switch (lesson.kind) {
     case "skill_reference":
       return await planReference(paths, lesson, now);
@@ -101,7 +192,6 @@ async function planSkill(paths: DistillPaths, lesson: WritableLesson, now: Date)
     return {
       target: name,
       writes: [{ path: filePath, mode: "append", text: renderLessonSection(lesson), capBytes: MAX_MANAGED_SKILL_BYTES }],
-      preview: renderLessonSection(lesson),
     };
   }
 
@@ -115,7 +205,6 @@ async function planSkill(paths: DistillPaths, lesson: WritableLesson, now: Date)
   return {
     target: name,
     writes: [{ path: filePath, mode: "create", text, capBytes: MAX_MANAGED_SKILL_BYTES }],
-    preview: text,
   };
 }
 
@@ -145,7 +234,6 @@ async function planReference(paths: DistillPaths, lesson: WritableLesson, now: D
       { path: referencePath, mode: "create", text: referenceText },
       { path: skillPath, mode: "append", text: pointer, capBytes: MAX_MANAGED_SKILL_BYTES },
     ],
-    preview: labelled([referencePath, referenceText], [skillPath, pointer]),
   };
 }
 
@@ -165,7 +253,6 @@ async function planRule(paths: DistillPaths, lesson: WritableLesson, now: Date):
     return {
       target: name,
       writes: [{ path: filePath, mode: "append", text: section }],
-      preview: section,
     };
   }
 
@@ -177,7 +264,6 @@ async function planRule(paths: DistillPaths, lesson: WritableLesson, now: Date):
   return {
     target: name,
     writes: [{ path: filePath, mode: "create", text }],
-    preview: text,
   };
 }
 
@@ -191,7 +277,7 @@ async function planAgent(paths: DistillPaths, lesson: WritableLesson, now: Date)
     throw new Error(`No agent prompt .omp/agents/${name}.md in this project; distill only patches existing ones.`);
   }
   const section = renderLessonSection(lesson);
-  return { target: name, writes: [{ path: filePath, mode: "append", text: section }], preview: section };
+  return { target: name, writes: [{ path: filePath, mode: "append", text: section }] };
 }
 
 /** The loudest surface: what lands here rides every request in the project. */
@@ -204,7 +290,6 @@ async function planAppendSystem(paths: DistillPaths, lesson: WritableLesson, now
   return {
     target: APPEND_SYSTEM_TARGET,
     writes: [{ path: filePath, mode: (await fileExists(filePath)) ? "append" : "create", text: section }],
-    preview: section,
   };
 }
 
@@ -224,6 +309,7 @@ export async function applyWrite(paths: DistillPaths, plan: WritePlan): Promise<
     const written: string[] = [];
     for (const write of plan.writes) {
       if (write.mode === "create") written.push(await createFile(write));
+      else if (write.mode === "splice") written.push(await spliceFile(write));
       else written.push(await appendFile(write));
     }
     return { written };
@@ -244,6 +330,37 @@ async function createFile(write: PlannedWrite): Promise<string> {
   } finally {
     await handle.close();
   }
+  return write.path;
+}
+
+/** Takes the planned lines out and puts the lesson's text where they were, in one write. */
+async function spliceFile(write: PlannedWrite): Promise<string> {
+  if (write.remove === undefined) throw new Error(`${write.path} was planned as a splice with nothing to remove.`);
+  const stats = await fs.lstat(write.path);
+  if (stats.isSymbolicLink()) throw new Error(`Refusing to write through the symlink ${write.path}.`);
+  if (stats.nlink > 1) throw new Error(`Refusing to overwrite ${write.path}: it has ${stats.nlink} hard links.`);
+
+  const content = await Bun.file(write.path).text();
+  // The quoted lines are whole lines: take their terminator with them, or a trim leaves a blank line
+  // where the removed block used to be.
+  const withTerminator = `${write.remove}\n`;
+  const cutting = content.includes(withTerminator) ? withTerminator : write.remove;
+  const at = content.indexOf(cutting);
+  if (at === -1) {
+    throw new Error(
+      `${write.path} changed since this was planned: the text to remove is no longer there. Nothing was written.`,
+    );
+  }
+  const next = `${content.slice(0, at)}${write.text}${content.slice(at + cutting.length)}`;
+  if (write.capBytes !== undefined && Buffer.byteLength(next, "utf8") > write.capBytes) {
+    throw new Error(`${write.path} would reach ${Buffer.byteLength(next, "utf8")} bytes, over the ${write.capBytes}-byte cap.`);
+  }
+
+  // A fresh file next to the old one, then the rename: a crash mid-write never leaves a half-trimmed
+  // surface behind, which matters more here than for an append.
+  const temp = `${write.path}.distill-${process.pid}.tmp`;
+  await Bun.write(temp, next);
+  await fs.rename(temp, write.path);
   return write.path;
 }
 
@@ -285,7 +402,9 @@ async function refuseSymlinkTrail(target: string): Promise<void> {
  * ledger's decision row, which is where provenance belongs.
  */
 export function renderLessonSection(lesson: WritableLesson): string {
-  return `\n${lesson.body.trim()}\n`;
+  // The separator belongs to the write (`appendFile` adds `"\n" + text`), not here: two leading
+  // newlines are a stray blank line in every appended surface.
+  return `${lesson.body.trim()}\n`;
 }
 
 /** The skill's pointer to a reference: continued under `## References` when that is its last section. */
@@ -345,11 +464,6 @@ function toRuleFrontmatter(description: string, trigger: AppliesTo | undefined):
 /** Single-quoted YAML: always valid for these strings, and it cannot swallow a `#` or a `:`. */
 function yamlScalar(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
-}
-
-function labelled(...entries: Array<[string, string]>): string {
-  if (entries.length === 1) return entries[0]?.[1] ?? "";
-  return entries.map(([file, text]) => `── ${file}\n${text}`).join("\n");
 }
 
 async function markdownStems(dir: string): Promise<string[]> {

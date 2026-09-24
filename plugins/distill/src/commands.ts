@@ -723,9 +723,9 @@ async function runReviewCommand(ctx: ExtensionCommandContext, paths: DistillPath
 async function reviewEntry(paths: DistillPaths, lesson: StoredLesson): Promise<ReviewEntry> {
   try {
     const plan = await planWrite(paths, lesson);
-    return { lesson, preview: plan.preview, changes: await planFileChanges(paths, plan.writes) };
+    return { lesson, changes: await planFileChanges(paths, plan.writes) };
   } catch (error) {
-    return { lesson, preview: "", blocked: messageOf(error) };
+    return { lesson, blocked: messageOf(error) };
   }
 }
 

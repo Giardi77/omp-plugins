@@ -89,8 +89,9 @@ status` is where its state is read.
 _Avoid_: batch, crawl, job
 
 **Change**:
-What approving a lesson writes: one file created, or one appended to — never a replacement, which is
-why a change is read as added lines with the file's own tail as context.
+What approving a lesson writes to one file: created, appended to, or trimmed — the quoted lines out,
+the lesson's text where they were. Never a whole-file replacement, which is why a change is read as
+lines going out and lines coming in, with the file's own neighbours as context.
 _Avoid_: patch, hunk, edit
 
 **Evaluation**:

@@ -631,8 +631,7 @@ describe("the distill command", () => {
     // The decision landed in the surface the diff pointed at: the lesson's own text, appended, and
     // nothing else — no dated heading, no provenance footnote in a file the next session reads.
     const written = await Bun.file(path.join(project, ".omp", "skills", "retry-helper", "SKILL.md")).text();
-    expect(written).toContain("Retries exist.");
-    expect(written).toContain("Sleep at least 250ms between retry attempts; 100ms flaps under CI load.");
+    expect(written).toContain("Retries exist.\n\nSleep at least 250ms between retry attempts; 100ms flaps under CI load.");
     expect(written).not.toContain("## Lesson");
     expect(written).not.toContain("_Distill lesson");
     expect((await listLessons(paths))[0]?.state).toBe("approved");

@@ -55,7 +55,7 @@ describe("skills", () => {
     expect(plan.writes[0]?.path).toBe(filePath);
     // The lesson's own text, undecorated: a surface the next session reads, and the ledger already
     // records which lesson wrote it and when.
-    expect(plan.preview).toBe("\nSleep at least 250ms between retry attempts.\n");
+    expect(plan.writes[0]?.text).toBe("Sleep at least 250ms between retry attempts.\n");
   });
 
   test("a missing slug is minted, with a description or not at all", async () => {
@@ -63,7 +63,7 @@ describe("skills", () => {
     const minted = await planWrite(paths, lesson({ target: "retry-backoff", title: "Retry backoff is coarse" }));
 
     expect(minted.writes[0]?.mode).toBe("create");
-    expect(minted.preview.startsWith("---\nname: retry-backoff\ndescription: Retry backoff is coarse\n---\n")).toBe(true);
+    expect(minted.writes[0]?.text.startsWith("---\nname: retry-backoff\ndescription: Retry backoff is coarse\n---\n")).toBe(true);
 
     // The loader drops a SKILL.md with no description, silently — so the writer refuses.
     await expect(planWrite(paths, lesson({ target: "silent", title: "<><>" }))).rejects.toThrow(
@@ -97,7 +97,8 @@ describe("skill references", () => {
     expect(plan.writes[0]?.text).toBe("# CI load\n\nSleep at least 250ms between retry attempts.\n");
     expect(plan.writes[1]?.path).toBe(filePath);
     expect(plan.writes[1]?.text).toBe("## References\n\n- [`references/ci-load.md`](references/ci-load.md) — CI load\n");
-    expect(plan.preview).toContain("── ");
+    expect(plan.writes[0]?.text).toContain("# CI load");
+    expect(plan.writes[1]?.text).toContain("references/ci-load.md");
 
     await applyWrite(paths, plan);
     expect(await Bun.file(filePath).text()).toContain("Hand-written prose.\n\n## References\n");
@@ -133,28 +134,28 @@ describe("rules", () => {
     const paths = await project();
 
     const always = await planWrite(paths, lesson({ kind: "rule", target: "no-force-push", title: "Never force-push", applies_to: "always" }));
-    expect(always.preview.startsWith("---\ndescription: 'Never force-push'\nalwaysApply: true\n---\n")).toBe(true);
+    expect(always.writes[0]?.text.startsWith("---\ndescription: 'Never force-push'\nalwaysApply: true\n---\n")).toBe(true);
 
     const scoped = await planWrite(
       paths,
       lesson({ kind: "rule", target: "sql-migrations", title: "Migrations are forward-only", applies_to: "globs:**/*.sql" }),
     );
-    expect(scoped.preview).toContain("globs:\n  - '**/*.sql'\n---");
+    expect(scoped.writes[0]?.text).toContain("globs:\n  - '**/*.sql'\n---");
 
     const conditioned = await planWrite(
       paths,
       lesson({ kind: "rule", target: "terraform-apply", title: "Ask before applying", applies_to: "condition:\\bterraform apply\\b" }),
     );
-    expect(conditioned.preview).toContain("condition:\n  - '\\bterraform apply\\b'\n---");
+    expect(conditioned.writes[0]?.text).toContain("condition:\n  - '\\bterraform apply\\b'\n---");
 
     const agentScoped = await planWrite(
       paths,
       lesson({ kind: "rule", target: "reviewer-tone", title: "Reviewer stays terse", applies_to: "agent:reviewer" }),
     );
-    expect(agentScoped.preview).toContain("agents:\n  - 'reviewer'\n---");
+    expect(agentScoped.writes[0]?.text).toContain("agents:\n  - 'reviewer'\n---");
 
     const listed = await planWrite(paths, lesson({ kind: "rule", target: "listed-only", title: "Only listed" }));
-    expect(listed.preview).toBe("---\ndescription: 'Only listed'\n---\n\nSleep at least 250ms between retry attempts.\n");
+    expect(listed.writes[0]?.text).toBe("---\ndescription: 'Only listed'\n---\n\nSleep at least 250ms between retry attempts.\n");
   });
 
   test("a patch keeps the trigger that is already on disk, and refuses a different one", async () => {
@@ -166,14 +167,15 @@ describe("rules", () => {
 
     const agreeing = await planWrite(paths, lesson({ kind: "rule", target: "no-force-push", applies_to: "always" }));
     expect(agreeing.writes[0]?.mode).toBe("append");
-    expect(agreeing.preview).not.toContain("alwaysApply");
+    expect(agreeing.writes[0]?.text).not.toContain("alwaysApply");
 
     await expect(
       planWrite(paths, lesson({ kind: "rule", target: "no-force-push", applies_to: "globs:**/*.sql" })),
     ).rejects.toThrow("fired by different conditions");
 
     await applyWrite(paths, agreeing);
-    expect(await Bun.file(filePath).text()).toContain("Never force-push.\n\n\nSleep at least 250ms between retry attempts.\n");
+    // One blank line between the prose and the lesson: the separator is the write's, not the text's.
+    expect(await Bun.file(filePath).text()).toContain("Never force-push.\n\nSleep at least 250ms between retry attempts.\n");
   });
 
   test("a rule name outside the allowlist is refused, and an empty title never mints a description", async () => {
@@ -195,7 +197,7 @@ describe("agent prompts and APPEND_SYSTEM.md", () => {
     const agentPath = await writeFile(path.join(paths.projectRoot, ".omp", "agents", "reviewer.md"), "# Reviewer\n\nBe terse.\n");
     const plan = await planWrite(paths, lesson({ kind: "agent_prompt", target: "reviewer" }));
     expect(plan.writes[0]?.path).toBe(agentPath);
-    expect(plan.preview).toBe("\nSleep at least 250ms between retry attempts.\n");
+    expect(plan.writes[0]?.text).toBe("Sleep at least 250ms between retry attempts.\n");
 
     await expect(planWrite(paths, lesson({ kind: "agent_prompt", target: "REVIEWER!" }))).rejects.toThrow(
       "not a usable agent name",
@@ -218,6 +220,86 @@ describe("agent prompts and APPEND_SYSTEM.md", () => {
   });
 });
 
+describe("trimming", () => {
+  const bloated = [
+    "---",
+    "name: retry-helper",
+    "description: Retries",
+    "---",
+    "",
+    "Retries exist.",
+    "",
+    "## Retry backoff",
+    "",
+    "Sleep at least 250ms between attempts.",
+    "",
+    "## Retry backoff (old)",
+    "",
+    "Sleep at least 250ms between attempts, because CI load makes 100ms flap.",
+    "",
+  ].join("\n");
+
+  test("a lesson that quotes lines to remove plans a splice, not an append", async () => {
+    const paths = await project();
+    const filePath = await writeFile(skillPath(paths, "retry-helper"), bloated);
+    const plan = await planWrite(
+      paths,
+      lesson({
+        removes: "## Retry backoff (old)\n\nSleep at least 250ms between attempts, because CI load makes 100ms flap.",
+        body: "Sleep at least 250ms between attempts; 100ms flaps under CI load.",
+      }),
+    );
+
+    expect(plan.writes.map(write => write.mode)).toEqual(["splice"]);
+    expect(plan.writes[0]?.path).toBe(filePath);
+    expect(plan.writes[0]?.remove).toBe(
+      "## Retry backoff (old)\n\nSleep at least 250ms between attempts, because CI load makes 100ms flap.",
+    );
+
+    await applyWrite(paths, plan);
+    const content = await Bun.file(filePath).text();
+    expect(content).not.toContain("(old)");
+    expect(content).toContain("## Retry backoff\n\nSleep at least 250ms between attempts.\n\nSleep at least 250ms");
+    // The duplicate is gone and the trimmed wording stands in its place, once.
+    expect(content.match(/100ms flaps under CI load/g)).toHaveLength(1);
+  });
+
+  test("the indentation a lesson quotes does not have to match, and an empty body removes only", async () => {
+    const paths = await project();
+    const filePath = await writeFile(skillPath(paths, "retry-helper"), "Retries exist.\n  - stale: use the old helper\nKeep this.\n");
+    const plan = await planWrite(paths, lesson({ removes: "- stale: use the old helper", body: "" }));
+
+    await applyWrite(paths, plan);
+    const content = await Bun.file(filePath).text();
+    expect(content).toBe("Retries exist.\nKeep this.\n");
+    expect(plan.writes[0]?.text).toBe("");
+  });
+
+  test("quoted text that is not in the file blocks the lesson rather than writing anything", async () => {
+    const paths = await project();
+    await writeFile(skillPath(paths, "retry-helper"), "Retries exist.\n");
+
+    await expect(planWrite(paths, lesson({ removes: "a paragraph that was never there" }))).rejects.toThrow(
+      /does not contain the text this lesson removes/,
+    );
+  });
+
+  test("text that appears twice is refused: a trim names one place", async () => {
+    const paths = await project();
+    await writeFile(skillPath(paths, "retry-helper"), "Same line.\nOther.\nSame line.\n");
+    await expect(planWrite(paths, lesson({ removes: "Same line.", body: "" }))).rejects.toThrow(
+      /appears 2 times/,
+    );
+  });
+
+  test("a trim of a file that does not exist yet is refused, not turned into a create", async () => {
+    const paths = await project();
+    await expect(planWrite(paths, lesson({ kind: "rule", target: "brand-new", removes: "anything" }))).rejects.toThrow(
+      /does not exist yet/,
+    );
+  });
+});
+
 describe("applying a write", () => {
   test("a patch appends after the hand-written prose and leaves it intact", async () => {
     const paths = await project();
@@ -228,7 +310,7 @@ describe("applying a write", () => {
 
     const content = await Bun.file(filePath).text();
     expect(content.startsWith(original)).toBe(true);
-    expect(content).toContain("Hand-written prose.\n\n\nSleep at least 250ms between retry attempts.\n");
+    expect(content).toContain("Hand-written prose.\n\nSleep at least 250ms between retry attempts.\n");
     expect(result.written).toEqual([filePath]);
   });
 
@@ -238,7 +320,7 @@ describe("applying a write", () => {
     const result = await applyWrite(paths, plan);
 
     expect(result.written).toEqual([skillPath(paths, "retry-backoff")]);
-    expect(await Bun.file(result.written[0] ?? "").text()).toBe(plan.preview);
+    expect(await Bun.file(result.written[0] ?? "").text()).toBe(plan.writes[0]?.text);
     await expect(applyWrite(paths, plan)).rejects.toThrow();
   });
 

@@ -26,8 +26,6 @@ import { messageOf } from "./util";
 
 export interface ReviewEntry {
   lesson: StoredLesson;
-  /** The exact text an approval appends (or the whole file when minting). */
-  preview: string;
   /** What the approval does to the project, file by file. Empty when the lesson is blocked. */
   changes?: FileChange[];
   /** Set when the lesson cannot be written as it stands (missing target, bad slug, size cap, ...). */
@@ -141,11 +139,12 @@ export class ReviewWindow implements Component {
     private readonly requestRender: () => void,
     private readonly done: (outcome: ReviewOutcome) => void,
     private readonly handlers: ReviewHandlers,
+    private readonly options?: { rows?: number },
   ) {
     // Undecided lessons only: a decided lesson is never listed, let alone decided twice.
     this.#entries = entries.filter(entry => entry.lesson.state === "proposed");
     this.#panel = new OverlayPanel("Distill review");
-    const terminalRows = process.stdout.rows || 24;
+    const terminalRows = options?.rows ?? process.stdout.rows ?? 24;
     const maxVisible = Math.max(1, Math.min(this.#entries.length, terminalRows - RESERVED_LINES));
     // No search (the rows are acted on by key, not filtered) and no wrap-around: a stray arrow
     // must never point `a` at the first lesson after the last one.
@@ -235,6 +234,10 @@ export class ReviewWindow implements Component {
     else if (data === "k") this.#list.handleInput("\x1b[A");
     else this.#list.handleInput(data);
     this.requestRender();
+  }
+
+  #rows(): number {
+    return this.options?.rows ?? process.stdout.rows ?? 24;
   }
 
   #current(): ReviewEntry | undefined {
@@ -381,28 +384,37 @@ export class ReviewWindow implements Component {
   #renderBody(width: number): string[] {
     if (this.#showChangeset) return this.#renderChangeset(width);
 
-    const lines: string[] = [...this.#recapLines(width)];
-
-    if (this.#entries.length === 0) {
-      lines.push(muted(this.theme, "No undecided lessons left — every lesson has been decided."));
-    } else {
-      lines.push(...this.#list.render(width));
-    }
-
+    const theme = this.theme;
+    const recap = this.#recapLines(width);
+    const list =
+      this.#entries.length === 0
+        ? [muted(theme, "No undecided lessons left — every lesson has been decided.")]
+        : this.#list.render(width);
     const entry = this.#denying ?? this.#current();
-    if (entry !== undefined) lines.push("", ...this.#renderDetail(entry, width));
-    if (this.#denying !== undefined) lines.push("", ...this.#reason.render(width));
-    if (this.#status !== "") lines.push("", color(this.theme, this.#statusColor, this.#status));
-    lines.push(
+    const prompt = this.#denying === undefined ? [] : ["", ...this.#reason.render(width)];
+    const status = this.#status === "" ? [] : ["", color(theme, this.#statusColor, this.#status)];
+    const hints = [
       "",
       muted(
-        this.theme,
+        theme,
         this.#denying === undefined
           ? "↑/↓ or j/k move · a accept · d deny · e evidence · c all changes · q quit"
           : "Enter deny with this reason · Esc cancel",
       ),
-    );
+    ];
 
+    // The detail pane gets exactly what is left of the terminal, and says so when that is not
+    // enough: the panel renders every line it is handed, and an over-tall frame is a window whose
+    // top is off-screen — which is how "the top text is cut off" actually happened.
+    const fixed = 2 /* the panel's own border */ + recap.length + list.length + prompt.length + status.length + hints.length + 1 /* the blank before the detail */ + 1 /* the cap's note */;
+    const spare = Math.max(2, this.#rows() - fixed);
+    const detail = entry === undefined ? [] : this.#renderDetail(entry, width);
+    const shown =
+      detail.length <= spare
+        ? detail
+        : capped(detail, Math.max(1, spare - 1), hidden => muted(theme, `… ${hidden} more line(s) — c reads the whole change`));
+
+    const lines = [...recap, ...list, ...(entry === undefined ? [] : ["", ...shown]), ...prompt, ...status, ...hints];
     return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
   }
 
@@ -475,9 +487,10 @@ export class ReviewWindow implements Component {
     ];
   }
 
-  #changeTheme(): { added(text: string): string; context(text: string): string; meta(text: string): string } {
+  #changeTheme(): { added(text: string): string; removed(text: string): string; context(text: string): string; meta(text: string): string } {
     return {
       added: text => color(this.theme, "success", text),
+      removed: text => color(this.theme, "error", text),
       context: text => color(this.theme, "dim", text),
       meta: text => muted(this.theme, text),
     };
@@ -493,11 +506,7 @@ export class ReviewWindow implements Component {
     ];
 
     if (entry.blocked !== undefined) {
-      lines.push(
-        color(theme, "warning", truncateToWidth(`blocked: ${entry.blocked}`, width, Ellipsis.Omit)),
-        muted(theme, "the lesson as written, since nothing can be applied:"),
-        ...wrapTextWithAnsi(lesson.body, width),
-      );
+      lines.push(color(theme, "warning", truncateToWidth(`blocked: ${entry.blocked}`, width, Ellipsis.Omit)));
     } else if ((entry.changes?.length ?? 0) > 0) {
       // What will change, and where: the file's own lines, added ones marked.
       for (const change of entry.changes ?? []) {
@@ -506,7 +515,11 @@ export class ReviewWindow implements Component {
       lines.push("", muted(theme, "c shows every change in this batch"));
     }
 
-    lines.push("", muted(theme, "The lesson:"), ...wrapTextWithAnsi(lesson.body, width));
+    // The lesson as written — unless it is a pure trim, where the change above *is* the lesson and
+    // the block would be an empty heading over nothing.
+    if (lesson.body.trim() !== "") {
+      lines.push("", muted(theme, "The lesson:"), ...wrapTextWithAnsi(lesson.body, width));
+    }
 
     if (lesson.rationale.trim() !== "") {
       lines.push(

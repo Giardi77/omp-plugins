@@ -15,7 +15,7 @@
 import * as path from "node:path";
 import { wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { DistillPaths } from "./config";
-import type { PlannedWrite } from "./writer";
+import { findRemoval, type PlannedWrite } from "./writer";
 
 /** Context lines shown around an append, as git does. */
 export const DEFAULT_CONTEXT_LINES = 3;
@@ -23,7 +23,7 @@ export const DEFAULT_CONTEXT_LINES = 3;
 export const DEFAULT_DIFF_LINES = 40;
 
 export interface ChangeLine {
-  kind: "added" | "context";
+  kind: "added" | "removed" | "context";
   /** The file's own line number: existing lines keep theirs, added ones continue from it. */
   number: number;
   text: string;
@@ -35,11 +35,13 @@ export interface FileChange {
   mode: PlannedWrite["mode"];
   lines: ChangeLine[];
   added: number;
+  removed: number;
   context: number;
 }
 
 export interface ChangeTheme {
   added(text: string): string;
+  removed(text: string): string;
   context(text: string): string;
   meta(text: string): string;
 }
@@ -58,12 +60,42 @@ export async function planFileChanges(
     const added = splitLines(write.text);
     const lines: ChangeLine[] = [];
 
-    let existing: string[] = [];
+    const onDisk = await Bun.file(absolute)
+      .text()
+      .catch(() => "");
+    const existing = splitLines(onDisk);
+
+    if (write.mode === "splice" && write.remove !== undefined) {
+      // A splice is exact: the quoted lines are in the file (planWrite checked), so the change is
+      // those lines out, the body in, and the lines around them for context.
+      const removed = splitLines(write.remove);
+      const found = findRemoval(existing, write.remove);
+      const at = found?.start ?? -1;
+      const removedLines = found?.lines ?? removed;
+      const before = at === -1 ? [] : existing.slice(Math.max(0, at - contextLines), at);
+      changes.push({
+        path: path.relative(paths.projectRoot, absolute),
+        mode: write.mode,
+        lines: [
+          ...before.map((line, index) => ({ kind: "context" as const, number: at - before.length + index + 1, text: line })),
+          ...(at === -1 ? [] : removedLines.map((line, index) => ({ kind: "removed" as const, number: at + index + 1, text: line }))),
+          ...added.map((line, index) => ({ kind: "added" as const, number: (at === -1 ? 0 : at) + index + 1, text: line })),
+          ...(at === -1 || at + removedLines.length > existing.length - 1
+            ? []
+            : existing.slice(at + removedLines.length, at + removedLines.length + contextLines).map((line, index) => ({
+                kind: "context" as const,
+                number: at + removedLines.length + index + 1,
+                text: line,
+              }))),
+        ],
+        added: added.length,
+        removed: at === -1 ? 0 : removedLines.length,
+        context: Math.min(contextLines, at === -1 ? 0 : at),
+      });
+      continue;
+    }
+
     if (write.mode === "append") {
-      const text = await Bun.file(absolute)
-        .text()
-        .catch(() => "");
-      existing = splitLines(text);
       const tail = existing.slice(Math.max(0, existing.length - contextLines));
       const first = existing.length - tail.length + 1;
       tail.forEach((line, index) => lines.push({ kind: "context", number: first + index, text: line }));
@@ -77,6 +109,7 @@ export async function planFileChanges(
       mode: write.mode,
       lines,
       added: added.length,
+      removed: 0,
       context: existing.length === 0 ? 0 : lines.length - added.length,
     });
   }
@@ -86,8 +119,9 @@ export async function planFileChanges(
 
 /** The heading above a change: the path, and what is being done to it. */
 export function describeChange(change: FileChange): string {
-  const verb = change.mode === "create" ? "new file" : "append";
-  return `${verb}  ${change.path}  (+${change.added}${change.context === 0 ? "" : `, ${change.context} context`})`;
+  const verb = change.mode === "create" ? "new file" : change.mode === "splice" ? "trim" : "append";
+  const counts = `+${change.added}${change.removed === 0 ? "" : `, -${change.removed}`}`;
+  return `${verb}  ${change.path}  (${counts}${change.context === 0 ? "" : `, ${change.context} context`})`;
 }
 
 /**
@@ -106,7 +140,7 @@ export function renderFileChange(
 
   const numbers = shown.map(line => String(line.number)).reduce((widest, value) => Math.max(widest, value.length), 1);
   for (const line of shown) {
-    const gutter = line.kind === "added" ? "+" : " ";
+    const gutter = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " ";
     const prefix = `${String(line.number).padStart(numbers, " ")} ${gutter} `;
     // A lesson's body is one long line in the file it writes, and it is the thing being approved:
     // wrap it rather than clip it, with the continuation sitting under the text.
@@ -114,7 +148,7 @@ export function renderFileChange(
     const rows = wrapped.length === 0 ? [""] : wrapped;
     rows.forEach((row, index) => {
       const text = index === 0 ? `${prefix}${row}` : `${" ".repeat(prefix.length)}${row}`;
-      lines.push(line.kind === "added" ? theme.added(text) : theme.context(text));
+      lines.push(line.kind === "added" ? theme.added(text) : line.kind === "removed" ? theme.removed(text) : theme.context(text));
     });
   }
 

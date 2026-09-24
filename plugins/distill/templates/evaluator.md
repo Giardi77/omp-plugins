@@ -105,6 +105,16 @@ The `rationale` field is not part of the lesson a future agent reads. It is what
 reads: why the fix must be applied — the cost of skipping it — and what in this session tells
 you it is true. Never spend it on which kind or target you chose; the write itself shows that.
 
+## When the surface is the problem
+
+A session often shows a skill or an agent prompt that has grown past what it earns: the same rule
+twice, a stale workaround, a wall of prose where a line would do, a section nobody ever needs. That
+is a lesson too, and usually a better one than another paragraph — quote the lines to take out in
+`removes`, and let the body say what should stand in their place (leave it empty when the answer is
+"nothing"). Prefer the trim to the addition whenever a surface is already carrying more than it
+returns. Never trim a file you have not read: the quote has to be the file's own words, and the
+plugin refuses text it cannot find there.
+
 ## What you see
 
 You are handed an inventory of the session's traces — the parent session and each of its

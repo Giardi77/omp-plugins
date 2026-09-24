@@ -48,6 +48,12 @@ export interface ProposedLesson {
   target: string;
   /** Rules only: what fires the rule. Absent means the agent pulls it in by description. */
   applies_to?: string;
+  /**
+   * Lines to take out of the target file, quoted as the evaluator read them. A lesson that carries
+   * this trims rather than appends: the quoted lines go, and `body` — if it has one — stands where
+   * they were. For a surface that has grown past what a session needs, this is the lesson.
+   */
+  removes?: string;
   rationale: string;
   /** Qualified record ids, `trace:record`. */
   citations: string[];
@@ -71,6 +77,8 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   ``,
   `A body carries three things, in this order: the problem (what goes wrong), the one moment in this session where it bit (the command, file or edit, and what it returned), and the instruction. Three to six lines, at most ${MAX_LESSON_BODY_CHARS} characters. The instance is the point: a lesson that states a rule nothing is anchored to is one nobody recognises when they are standing in it.`,
   `rationale: why the fix must be applied — the cost of skipping it next time — and what makes this true. The reviewer reads it before deciding, so it is yours to argue in; it is never a note about which kind or target you chose.`,
+  ``,
+  `removes: lines to take *out* of the target file — a rule that no longer holds, the same instruction twice, a stale workaround, a paragraph that costs more than it returns. Quote them as you read them; the plugin finds those lines ignoring indentation and removes exactly them, putting the body where they were (leave the body empty to remove and add nothing). A surface that has grown bloated is a lesson: trim it rather than adding to it.`,
   ``,
   `Evidence. Every lesson cites records you read with \`get_trace\`, as \`trace:record\` — the trace id from the payload, the record id from the section's brackets. Cite the records where the failure or the correction actually happened: a lesson whose citations do not show it is not grounded, and the reviewer sees the mismatch. A citation that does not resolve against the session is rejected with an error and you are asked again: invented evidence never reaches review. Never paste a record into the body — the plugin extracts the cited records' own text verbatim for the reviewer, so the body names the moment in a clause and moves on.`,'',
   `Tool results are summarised: their first line and total size, not their output. Each trace names the transcript file on disk; its records are the session's own words, so prefer reading them with \`get_trace\` over pulling a whole transcript.`,
@@ -174,6 +182,11 @@ export const PROPOSE_LESSONS_PARAMETERS: Record<string, unknown> = {
             type: "string",
             description:
               "Rules only: what fires the rule. \"always\", \"globs:**/*.sql\", \"condition:<regex>\", \"ast:<pattern>\", or \"agent:<name>\". Omit and the rule is listed by description only.",
+          },
+          removes: {
+            type: "string",
+            description:
+              "Lines to take out of the target file, quoted as read. The body stands where they were; empty body removes without adding.",
           },
           rationale: {
             type: "string",
@@ -298,6 +311,8 @@ export function parseAnswer(raw: unknown): AnswerParse {
       );
     }
     for (const problem of targetProblems(kind, strings.target ?? "")) errors.push(`${where}.${problem}`);
+    const removes = typeof lesson.removes === "string" ? lesson.removes.trim() : undefined;
+    if (removes !== undefined && removes === "") errors.push(`${where}.removes was given as empty text; omit it instead`);
     const appliesTo = typeof lesson.applies_to === "string" ? lesson.applies_to.trim() : undefined;
     if (appliesTo !== undefined && appliesTo !== "" && !parseAppliesTo(appliesTo)) {
       errors.push(
@@ -318,6 +333,7 @@ export function parseAnswer(raw: unknown): AnswerParse {
       body: strings.body ?? "",
       target: strings.target ?? "",
       ...(appliesTo === undefined || appliesTo === "" ? {} : { applies_to: appliesTo }),
+      ...(removes === undefined || removes === "" ? {} : { removes }),
       rationale: strings.rationale ?? "",
       citations,
     });

@@ -3,7 +3,12 @@ import { distillPaths } from "../src/config";
 import { describeChange, planFileChanges, renderFileChange } from "../src/diff";
 import { makeTempDir } from "./fixtures";
 
-const theme = { added: (text: string) => `A${text}`, context: (text: string) => `C${text}`, meta: (text: string) => `M${text}` };
+const theme = {
+  added: (text: string) => `A${text}`,
+  removed: (text: string) => `R${text}`,
+  context: (text: string) => `C${text}`,
+  meta: (text: string) => `M${text}`,
+};
 
 async function project(): Promise<{ root: string; paths: ReturnType<typeof distillPaths> }> {
   const root = await makeTempDir("omp-distill-diff-");
@@ -67,6 +72,7 @@ describe("rendering a change", () => {
     path: ".omp/rules/tests.md",
     mode: "create" as const,
     added: 3,
+    removed: 0,
     context: 0,
     lines: [
       { kind: "added" as const, number: 1, text: "---" },
@@ -92,10 +98,40 @@ describe("rendering a change", () => {
     for (const line of lines) expect(line.replace(/^[ACM]/, "").length).toBeLessThanOrEqual(40);
   });
 
+  test("a trim shows the lines going out and the ones taking their place", async () => {
+    const { root, paths } = await project();
+    const target = `${root}/.omp/skills/retry-helper/SKILL.md`;
+    await Bun.write(target, ["# Retries", "", "Sleep 100ms between attempts.", "", "## Old note", "", "Ignore this.", ""].join("\n"));
+
+    const changes = await planFileChanges(paths, [
+      {
+        path: ".omp/skills/retry-helper/SKILL.md",
+        mode: "splice",
+        remove: "## Old note\n\nIgnore this.",
+        text: "Sleep 250ms; 100ms flaps under CI load.\n",
+      },
+    ]);
+
+    const change = changes[0];
+    expect(change?.removed).toBe(3);
+    expect(change?.added).toBe(1);
+    expect(describeChange(change!)).toBe("trim  .omp/skills/retry-helper/SKILL.md  (+1, -3, 3 context)");
+    const rows = change?.lines.map(line => `${line.kind}:${line.text}`) ?? [];
+    expect(rows).toContain("context:Sleep 100ms between attempts.");
+    expect(rows).toContain("removed:## Old note");
+    expect(rows).toContain("removed:Ignore this.");
+    expect(rows).toContain("added:Sleep 250ms; 100ms flaps under CI load.");
+
+    const rendered = renderFileChange(change!, theme, 80);
+    expect(rendered.some(line => line.startsWith("R"))).toBe(true);
+    expect(rendered.some(line => line.startsWith("A"))).toBe(true);
+  });
+
   test("a change longer than the pane is capped, and says how much it cut", () => {
     const long = {
       ...change,
       added: 10,
+      removed: 0,
       lines: Array.from({ length: 10 }, (_unused, index) => ({ kind: "added" as const, number: index + 1, text: `line ${index + 1}` })),
     };
     const capped = renderFileChange(long, theme, 80, { maxLines: 4 });
@@ -112,6 +148,7 @@ describe("rendering a change", () => {
       ...change,
       mode: "append" as const,
       added: 1,
+      removed: 0,
       context: 2,
       lines: [
         { kind: "context" as const, number: 9, text: "## Hands-on rules" },
