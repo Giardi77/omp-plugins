@@ -53,3 +53,15 @@ as that example's last sentence; a project set up before this change keeps its o
 paragraph across. The `body` field's own description carries the kind split, so a model that never
 reads the prompt still knows what belongs in the field. `ANSWER_CONTRACT_VERSION` stays at 2: no field
 was added or removed.
+
+**Amended 2026-09-25**: the shipped prompt no longer teaches the injected form as the last sentence of
+the read form's example. `## The shape, surface by surface` gives each of the five surfaces a labelled
+body of its own, and states the two rules that hold everywhere: no preamble and no filler, and shaping
+is not writing more — the body cap is unchanged, the instruction is just arranged so the next reader
+finds it in one pass. Structure is case-by-case rather than barred on injected surfaces (a heading
+where the file's own sections make one, a list where the instruction is a sequence), which is the
+operator's rule: no preamble and bullshit, structure where it is the right case. A body carries no
+title heading of its own — a mint writes the frontmatter description, `planReference` writes
+`# <title>` above the body — and `##` is the depth the plugin itself uses for the `## References` line
+it adds to `SKILL.md`. The paragraph this ADR's Consequences describes still stands one line above the
+section that took over its job.

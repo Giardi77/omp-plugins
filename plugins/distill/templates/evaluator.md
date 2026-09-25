@@ -148,14 +148,15 @@ else.
 ## How a lesson reads
 
 It is an instruction, not a report. Write the sentence you would say to the agent standing in the
-situation — what to do, and the reason when the reason is what makes it stick — then stop. Two or
-three lines is usually the whole of it, and a skill that has steps is the list of steps.
+situation — what to do, and the reason when the reason is what makes it stick — then stop. Say the
+behaviour to adopt: a lesson naming only the trap leaves the agent to guess the alternative. Two
+or three lines is usually the whole of it; a procedure is its steps, one per line.
 
-What a body never carries: labels ("Problem:", "Where it bit:", "Instruction:"), dates, counts, the
-outcome of the session, or the trap restated in the abstract. The reviewer reads that in `rationale`,
-the citations hold the evidence, and a body that repeats any of it charges every future session for
-the reviewer's copy. The cost of getting it wrong is not a part of the lesson either — it belongs in
-`rationale`, where it is read once.
+A body is the instruction itself: what to do, and the mechanism that makes it stick when one is
+needed. The account of how you found it — the labels ("Problem:", "Where it bit:", "Instruction:"),
+the dates, the counts, what the session did, the trap restated in the abstract — belongs in
+`rationale`, which the reviewer reads once and no future session pays for. So does the cost of
+getting it wrong: it is what convinces the reviewer, not what the next agent acts on.
 
 Bad: "Problem: running the suite from the repo root finds no tests and reports an empty pass, so a
 green run proves nothing. It bit on 2026-09-22, when the agent read that empty pass as success.
@@ -171,12 +172,75 @@ reads it. The first would have been a fine `rationale`.
 A rule, an agent prompt and `APPEND_SYSTEM.md` take less still. They are not opened on demand: they
 are injected, into a stream the moment a condition matches or into every request that agent makes, so
 their body is the instruction and at most the clause that makes it stick — the trigger already knows
-the situation. "Run the suite from packages/core." Everything else goes in `rationale`, with the rest
-of what only the reviewer reads.
+the situation. No preamble and no filler, ever — the rule's description, the agent's name, the
+section you are adding to already head it — and a heading or a list only where it is the right
+case: a heading where the file's own sections make one, a list where the instruction is a
+sequence. `## The shape, surface by surface` shows one per surface. Everything else goes in
+`rationale`, with the rest of what only the reviewer reads.
 
 The `rationale` field is not part of the lesson a future agent reads. It is what the reviewer
 reads: why the fix must be applied — the cost of skipping it — and what in this session tells
 you it is true. Never spend it on which kind or target you chose; the write itself shows that.
+
+## The shape, surface by surface
+
+Shaping a body is not writing more. It is the same instruction arranged so the next reader finds it
+in one pass — and each example below is the body itself, without the fence around it, written for
+the surface named above it.
+
+**A `skill` body, appended to an existing `.omp/skills/<slug>/SKILL.md`** — a sub-procedure gets a
+heading at the depth the file already uses (the plugin writes `## References` itself, so `##` is the
+natural level), and a sequence becomes steps:
+
+```markdown
+## Before each wave
+
+Prove exactly one driver is alive before starting a wave:
+
+1. `pgrep -f drive.py` returns one pid, or none.
+2. The pid file matches it.
+
+A cancelled shell does not kill its python child, so the next wave stacks a second driver on the
+first and both write the same output file.
+```
+
+**A `skill_reference` body, for a new `.omp/skills/<slug>/references/<name>.md`** — the plugin
+writes `# <your title>` above the body, so it opens with the sentence saying what the file covers
+and when to open it, never with a heading of its own, and continues in `##` sections:
+
+```markdown
+This file is for the CI flake that will not reproduce locally.
+
+## What it looks like
+
+The failing assertion moves between runs, and the same commit passes on a re-run.
+```
+
+**A `rule` body, injected when its trigger matches** — the instruction, no preamble; a list is
+right when the instruction is a sequence:
+
+```markdown
+Run the suite from packages/core, never the repo root: there it passes with no tests found.
+```
+
+**An `agent_prompt` body, appended to `.omp/agents/<name>.md`** — it rides every request that
+agent makes, so it states the behaviour and stops; a heading only where the file's own sections
+make one the right case:
+
+```markdown
+The pid file is the truth, not `ps`: a cancelled shell leaves its python child alive.
+```
+
+**An `append_system` body, the loudest surface there is** — one instruction, on every request of
+the main agent, and it has to be worth that:
+
+```markdown
+Commit before you refactor: two commits are easier to review than one that does both.
+```
+
+Two shapes are wrong on every surface: a preamble ("This lesson came from…", "Problem:"), and a
+heading whose own words are the whole of the paragraph under it. Keep each line able to stand on its
+own, too — a later trim quotes them back out line for line.
 
 ## When the surface is the problem
 
