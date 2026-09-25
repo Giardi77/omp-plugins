@@ -38,8 +38,13 @@ level is active; the level persists with the session.
 
 `🐴 <mode>` sits next to the `mode` segment — accent while the agent runs, muted when idle. It rides
 every built-in preset except `ascii` (which stays emoji-free), so no config change is needed.
-Hosts without the segment registry, and `statusLine.preset: custom` configs (whose segment list is
-validated against the host's catalog), get the mode as a hook line under the composer instead.
+
+With `statusLine.preset: custom` the bar renders your own segment list and OMP validates those ids
+against its catalog, which has no `ponytail` id — there the mode arrives as a hook line under the
+composer instead (same as the upstream extension). To get it back inline, add OMP's own `status`
+segment to `leftSegments` and set `showHookStatus: false`; `status` renders hook statuses inline, so
+this extension's entry lands in the bar with no hook line under it.
+
 `PONYTAIL_HIDE_STATUS=1` or `{"hideStatus": true}` hides the chip and keeps the ruleset active.
 
 The chip uses OMP's `SEGMENTS` / `STATUS_LINE_PRESETS` exports — OMP has no extension-segment API as

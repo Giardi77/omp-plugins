@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Giardi77's OMP plugin marketplace.",
-    "version": "4.10.0",
+    "version": "4.10.1",
     "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "omp-ponytail-extension",
       "description": "Lazy senior dev mode: ruleset, skills, and a status-line chip. Forked from @dietrichgebert/ponytail.",
-      "version": "4.10.0",
+      "version": "4.10.1",
       "source": "./ponytail",
       "author": {
         "name": "Giardi77"
