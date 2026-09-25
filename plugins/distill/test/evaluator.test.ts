@@ -6,6 +6,7 @@ import {
   assertToolSurface,
   compareVersions,
   EVALUATOR_TOOL_NAMES,
+  type EvaluatorSettingsOptions,
   type EvaluatorTool,
   runEvaluation,
   sealedSessionOptions,
@@ -18,6 +19,9 @@ import { isRecord } from "../src/util";
 import { assistantMessage, makeTempDir, textPart, userMessage, writeSessionFixture } from "./fixtures";
 
 const SESSION_ID = "abc12345-1111-7000-8000-000000000050";
+
+/** Where the fake host keeps its own settings — never inside the project. */
+const AGENT_DIR = "/home/operator/.omp";
 
 async function fixtureBundle(): Promise<{ paths: DistillPaths; bundle: TraceBundle }> {
   const dir = await makeTempDir("omp-distill-evaluator-");
@@ -80,6 +84,8 @@ const finish: ScriptedCall = { tool: "tasks_completed", params: {} };
 /** A fake injected SDK whose session plays a scripted transcript. */
 function scriptedSdk(script: Script) {
   const created: CreateAgentSessionOptions[] = [];
+  const settingsLoads: EvaluatorSettingsOptions[] = [];
+  const isolatedSettings = { isolated: true } as never;
   const prompted: string[] = [];
   let disposed = 0;
 
@@ -117,25 +123,35 @@ function scriptedSdk(script: Script) {
   const sdk = {
     VERSION: "18.3.0",
     SessionManager: { inMemory: () => ({ memory: true }) as never },
+    Settings: {
+      loadIsolated: async (options: EvaluatorSettingsOptions) => {
+        settingsLoads.push(options);
+        return isolatedSettings;
+      },
+    },
     createAgentSession: async (options: CreateAgentSessionOptions) => {
       created.push(options);
       return { session };
     },
   };
 
-  return { sdk, created, prompted, disposedCount: () => disposed };
+  return { sdk, created, settingsLoads, isolatedSettings, prompted, disposedCount: () => disposed };
 }
 
 function isTool(value: unknown): value is EvaluatorTool {
   return isRecord(value) && typeof value.name === "string" && typeof value.execute === "function";
 }
 
-async function run(script: Script, overrides: { config?: typeof DEFAULT_CONFIG; now?: number } = {}) {
+async function run(
+  script: Script,
+  overrides: { config?: typeof DEFAULT_CONFIG; now?: number; sdk?: Parameters<typeof runEvaluation>[0]["sdk"] } = {},
+) {
   const { paths, bundle } = await fixtureBundle();
   const fake = scriptedSdk(script);
   const result = await runEvaluation({
-    sdk: fake.sdk,
+    sdk: overrides.sdk ?? fake.sdk,
     paths,
+    agentDir: AGENT_DIR,
     config: overrides.config ?? DEFAULT_CONFIG,
     ...(overrides.now === undefined ? {} : { now: overrides.now }),
     bundle,
@@ -150,6 +166,7 @@ describe("sealing", () => {
   test("the option set is sealed as a value", () => {
     const sessionManager = { memory: true } as never;
     const modelRegistry = { registry: true } as never;
+    const settings = { settings: true } as never;
     const tool = { name: "propose_lessons", label: "x", description: "y", parameters: {}, execute: async () => ({ content: [] }) };
 
     const options = sealedSessionOptions({
@@ -158,11 +175,13 @@ describe("sealing", () => {
       tools: [tool],
       sessionManager,
       modelRegistry,
+      settings: settings as never,
       timeoutSeconds: 600,
       now: 1_000_000,
     });
 
     expect(options.cwd).toBe("/work/alpha");
+    expect(options.settings).toBe(settings);
     expect(options.systemPrompt).toEqual(["# taste"]);
     expect(options.restrictToolNames).toBe(true);
     expect(options.toolNames).toEqual(["read", "glob", "grep", "get_trace", "propose_lessons", "tasks_completed"]);
@@ -183,6 +202,25 @@ describe("sealing", () => {
     expect(options.parentTaskPrefix).toBe("distill");
     expect(options.deadline).toBe(1_000_000 + 600_000);
     expect(options.customTools).toEqual([tool]);
+  });
+
+  test("the evaluator's settings come from the agent dir, not the project", async () => {
+    const { fake, paths } = await run({ calls: [readTail, finish] });
+
+    expect(fake.settingsLoads).toHaveLength(1);
+    expect(fake.settingsLoads[0]?.cwd).toBe(AGENT_DIR);
+    expect(fake.settingsLoads[0]?.agentDir).toBe(AGENT_DIR);
+    // A project `.omp/settings.json` must not be read: `cwd` is what the host discovers it from.
+    expect(fake.settingsLoads[0]?.cwd).not.toBe(paths.projectRoot);
+    expect(fake.settingsLoads[0]?.overrides).toEqual({ "advisor.enabled": false });
+    expect(fake.created[0]?.settings).toBe(fake.isolatedSettings);
+  });
+
+  test("a host whose SDK cannot load settings in isolation is refused, not run unsealed", async () => {
+    const fake = scriptedSdk({ calls: [readTail, finish] });
+    await expect(run({ calls: [readTail, finish] }, { sdk: { ...fake.sdk, Settings: {} as never } })).rejects.toThrow(
+      "no Settings.loadIsolated",
+    );
   });
 
   test("the tool surface is compared, not trusted", () => {
@@ -312,6 +350,7 @@ describe("a run", () => {
     const result = await runEvaluation({
       sdk: fake.sdk,
       paths,
+      agentDir: AGENT_DIR,
       config: DEFAULT_CONFIG,
       bundle: loaded.bundle,
       payload: "payload",
@@ -375,6 +414,7 @@ describe("a run", () => {
     const result = await runEvaluation({
       sdk: fake.sdk,
       paths,
+      agentDir: AGENT_DIR,
       config: DEFAULT_CONFIG,
       bundle,
       payload: "payload",
@@ -433,6 +473,7 @@ describe("a run", () => {
       runEvaluation({
         sdk: fake.sdk,
         paths,
+        agentDir: AGENT_DIR,
         config: DEFAULT_CONFIG,
         bundle,
         payload: "payload",
@@ -454,6 +495,7 @@ describe("a run", () => {
       runEvaluation({
         sdk: fake.sdk,
         paths,
+        agentDir: AGENT_DIR,
         config: DEFAULT_CONFIG,
         bundle,
         payload: "payload",

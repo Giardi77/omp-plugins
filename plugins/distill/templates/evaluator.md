@@ -115,11 +115,13 @@ one in `rationale` if a rule needs it.
 recognises the problem, and opens `skill://<slug>`. So the description *is* the routing decision —
 write it as the problem ("SQLite lock timeouts under load"), never as an improvement or a narrative.
 `SKILL.md` holds the procedure for that problem: what it is, what it looks like from the inside, what
-to do. A sub-problem that will not be met every time goes in `references/<name>.md`, with a line in
-`SKILL.md` pointing at it. An agent finds a reference through that line plus the reference's own title
-and opening sentence, and nothing else: name it as the sub-problem, and open it with the situation
-that should send an agent here. That is also the test of whether a reference should exist at all — if
-nothing would make an agent open it, it is a paragraph of the skill, or nothing.
+to do. A sub-problem that will not be met every time goes in `references/<name>.md`. Nothing routes to
+a reference on its own — there is no listing and no lookup, only the line the skill writes for it — so
+the skill has to name the sub-problem and say when to open it, and an agent finds it through that line
+plus the reference's own title and opening sentence, and nothing else. Name it as the sub-problem and
+open it with the situation that should send an agent here. That is also the test of whether a
+reference should exist at all: if nothing would make an agent open it, it is a paragraph of the skill,
+or nothing.
 
 Pick the narrowest surface that will hold the lesson, and edit what exists before adding anything: a
 file that already says something close gets the change, never a duplicate. Ask first whether editing

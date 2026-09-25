@@ -38,6 +38,7 @@ export const MIN_HOST_SDK_VERSION = "17.4.0";
 export type EvaluatorModel = NonNullable<CreateAgentSessionOptions["model"]>;
 export type EvaluatorSessionManager = NonNullable<CreateAgentSessionOptions["sessionManager"]>;
 export type EvaluatorModelRegistry = NonNullable<CreateAgentSessionOptions["modelRegistry"]>;
+export type EvaluatorSettings = NonNullable<CreateAgentSessionOptions["settings"]>;
 
 export const EVALUATOR_TOOL_NAMES: readonly string[] = [
   "read",
@@ -108,11 +109,19 @@ export interface EvaluatorSessionLike {
   abort?(): void;
 }
 
+/** The slice of the SDK's `SettingsOptions` the evaluator uses. */
+export interface EvaluatorSettingsOptions {
+  cwd?: string;
+  agentDir?: string;
+  overrides?: Record<string, unknown>;
+}
+
 /** The injected SDK surface; `pi.pi` satisfies it. */
 export interface EvaluatorSdkLike {
   VERSION: string;
   createAgentSession(options: CreateAgentSessionOptions): Promise<{ session: EvaluatorSessionLike }>;
   SessionManager: { inMemory(cwd?: string): EvaluatorSessionManager };
+  Settings: { loadIsolated(options: EvaluatorSettingsOptions): Promise<EvaluatorSettings> };
 }
 
 export type ProposeLessonsTool = EvaluatorTool;
@@ -131,6 +140,8 @@ export interface SealedSessionInput {
   tools: EvaluatorTool[];
   sessionManager: EvaluatorSessionManager;
   modelRegistry: EvaluatorModelRegistry;
+  /** The operator's own settings, loaded from the agent dir — never the project's. */
+  settings: EvaluatorSettings;
   model?: EvaluatorModel;
   thinkingLevel?: ConfiguredThinkingLevel;
   timeoutSeconds: number;
@@ -140,13 +151,15 @@ export interface SealedSessionInput {
 /**
  * The sealed option set (ADR-0007, ADR-0009). Every entry is load-bearing: drop
  * `parentTaskPrefix` and the evaluator claims process globals as the main session; drop
- * `SessionManager.inMemory()` and it writes its own transcript into the store it reads.
+ * `SessionManager.inMemory()` and it writes its own transcript into the store it reads; drop
+ * `settings` and the host reads the project's `.omp/settings.json` for this session.
  */
 export function sealedSessionOptions(input: SealedSessionInput): CreateAgentSessionOptions {
   return {
     cwd: input.projectRoot,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
+    settings: input.settings,
     systemPrompt: [input.evaluatorPrompt],
     toolNames: [...EVALUATOR_TOOL_NAMES],
     restrictToolNames: true,
@@ -185,6 +198,8 @@ export interface EvaluationRun {
 export interface RunEvaluationInput {
   sdk: EvaluatorSdkLike;
   paths: DistillPaths;
+  /** The host's agent directory (`pi.pi.getAgentDir()`): where the evaluator's own settings live. */
+  agentDir: string;
   config: DistillConfig;
   bundle: TraceBundle;
   payload: string;
@@ -347,6 +362,26 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
     },
   };
 
+  // The evaluator inherits the operator's settings and deliberately not the project's. A
+  // project `.omp/settings.json` is instruction-shaped configuration for coding sessions —
+  // `advisor.enabled` attaches a second model that reviews every turn (with the project's
+  // `WATCHDOG.md`/`WATCHDOG.yml` fed to it), `workspace.additionalDirectories` widens what the
+  // read tools can open, `tools.approval.*` can gate them outright — and none of it should steer
+  // a session whose only input is a trace. Loading from the agent dir leaves the project layer
+  // unread; the advisor is turned off here because the operator's own layer may enable it too.
+  // Asserted rather than trusted, like the rest of the seal: a host older than this option would
+  // otherwise fail the scan with a TypeError instead of saying what it is missing.
+  if (typeof input.sdk.Settings?.loadIsolated !== "function") {
+    throw new Error(
+      "this host's SDK has no Settings.loadIsolated, so the evaluator cannot be given settings of its own; distill will not run it against the project's",
+    );
+  }
+  const settings = await input.sdk.Settings.loadIsolated({
+    cwd: input.agentDir,
+    agentDir: input.agentDir,
+    overrides: { "advisor.enabled": false },
+  });
+
   const session = (
     await input.sdk.createAgentSession(
       sealedSessionOptions({
@@ -355,6 +390,7 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
         tools: [traceTool, tool, completionTool],
         sessionManager: input.sdk.SessionManager.inMemory(input.paths.projectRoot),
         modelRegistry: input.modelRegistry,
+        settings,
         model: input.model,
         thinkingLevel: thinkingLevelFromConfig(input.config.thinking),
         timeoutSeconds: input.config.timeout_seconds,

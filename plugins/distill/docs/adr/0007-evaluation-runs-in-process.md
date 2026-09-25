@@ -5,7 +5,8 @@ Status: accepted (supersedes ADR-0001)
 Evaluation runs in the host process as a second agent session, built with
 `pi.pi.createAgentSession()` — the SDK instance the host injects as `pi.pi`, never a direct import —
 rather than as a child `omp` process. The session is sealed: `restrictToolNames` with an explicit
-tool list, `disableExtensionDiscovery`, MCP/LSP/IRC off, an in-memory session manager, and an
+tool list, `disableExtensionDiscovery`, MCP/LSP/IRC off, an in-memory session manager, settings
+loaded from the operator's own agent dir rather than the project's, and an
 assertion on `session.getEnabledToolNames()` before any payload is sent. ADR-0001's premise — that the
 extension API exposes no way to run a model call — was false: the SDK is injected in full as
 `pi.pi`, and `createAgentSession` is the function omp's own in-process subagents already use.
@@ -31,6 +32,20 @@ means *every* built-in tool where `restrictToolNames` is unsupported, and an unh
 to be at least 17.4.0 — the first version carrying `restrictToolNames` and
 `allowRestrictedCustomTools` — and the monorepo's pin tracks the host it must run under rather than
 leading it.
+
+Settings are the one input the sealed option list does not empty on its own: five options take an
+explicit `[]` and a fixed `systemPrompt` replaces every generated block, but with `settings` omitted
+the host resolves the **project's** own `.omp/settings.json` — enough for a project to attach an
+advisor (`advisor.enabled`, fed its own `WATCHDOG.md`/`WATCHDOG.yml`), widen what the read tools may
+open (`workspace.additionalDirectories`) and gate them (`tools.approval.*`). The evaluator therefore
+loads its own settings from the agent dir through `Settings.loadIsolated` — the host's documented way
+to get a settings instance without touching the process-global one the main session holds — with
+`advisor.enabled` forced off, and refuses to run when the host exposes no such entry point rather
+than fail the scan with a `TypeError`. Verified on omp 18.3.0 against a project whose settings enable
+an advisor: the evaluator reports `isAdvisorEnabled() === false`, and its composed system prompt is
+byte-identical to the shipped `templates/evaluator.md` while a canary string placed in the project's
+`AGENTS.md`, `.omp/APPEND_SYSTEM.md`, rules, skills, agents and `WATCHDOG.md`/`WATCHDOG.yml` appears
+in none of it.
 
 The session **must** be built from `pi.pi`, never from a direct
 `import ... from "@oh-my-pi/pi-coding-agent"`. That specifier does not resolve to the host: an

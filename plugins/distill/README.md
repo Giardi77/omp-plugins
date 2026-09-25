@@ -103,7 +103,9 @@ exact payload so you can see what would leave before it does.
 
 The evaluator runs inside omp's own process as a sealed agent session: an explicit tool list,
 extension discovery, MCP, LSP and IRC off, an in-memory session so a scan leaves no record in the
-store it reads, and an assertion on the mounted tool surface before any payload is sent.
+store it reads, settings read from your own agent dir rather than the project's (a project can attach
+an advisor and gate tools through `.omp/settings.json`), and an assertion on the mounted tool surface
+before any payload is sent.
 
 The evaluator's tool surface needs omp's SDK at 17.4.0 or newer; older hosts are refused rather
 than run unsealed.

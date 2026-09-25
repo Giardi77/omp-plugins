@@ -597,6 +597,7 @@ async function scanOne(
   const run = await runEvaluation({
     sdk: pi.pi,
     paths,
+    agentDir: pi.pi.getAgentDir(),
     config,
     bundle: pending,
     payload,
