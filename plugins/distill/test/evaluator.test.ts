@@ -237,6 +237,21 @@ describe("sealing", () => {
     expect(fake.settingsLoads[0]?.overrides).toEqual({ "advisor.enabled": false });
   });
 
+  test("a settings instance with no `get` (18.3.1) still loads the evaluator's own", async () => {
+    // 18.3.1 dropped `Settings.get(path)`: the instance is a layered store with `rawValue`,
+    // `overlay` and typed accessors, and reading a path there is a TypeError — which used to take
+    // down every scan on that host. An absent method and an `undefined` one are the same to
+    // `typeof`, so the stub spells out the shape the host actually has.
+    const fake = scriptedSdk({ calls: [readTail, finish] });
+    const instance = { get: undefined, rawValue: () => undefined, overlay: () => undefined };
+    const sdk = { ...fake.sdk, Settings: { ...fake.sdk.Settings, instance } };
+    await run({ calls: [readTail, finish] }, { sdk });
+
+    // The session carries `parentTaskPrefix`, so this host never binds the evaluator to the
+    // process's capability state, and there is nothing to carry across.
+    expect(fake.settingsLoads[0]?.overrides).toEqual({ "advisor.enabled": false });
+  });
+
   test("a host whose SDK cannot load settings in isolation is refused, not run unsealed", async () => {
     const fake = scriptedSdk({ calls: [readTail, finish] });
     await expect(run({ calls: [readTail, finish] }, { sdk: { ...fake.sdk, Settings: {} as never } })).rejects.toThrow(

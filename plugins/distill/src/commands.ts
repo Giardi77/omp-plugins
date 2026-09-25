@@ -502,6 +502,18 @@ async function runScanJob(pi: ExtensionAPI, ctx: ExtensionCommandContext, paths:
         await writeScanJob(paths, job);
       }
       job.status = cancellation.signal.aborted ? "cancelled" : "finished";
+    } catch (error) {
+      // A failed run ends the scan, and the journal has to say so: the runner is about to die with
+      // the throw, and a journal left `running` reads as a scan still in flight — the one thing
+      // `/distill status` must never say about a scan that is over.
+      job.status = "failed";
+      job.errors.push(messageOf(error));
+      const inFlight = job.sessions.find(session => session.status === "running");
+      if (inFlight !== undefined) {
+        inFlight.status = "failed";
+        inFlight.reason = messageOf(error);
+      }
+      throw error;
     } finally {
       clearInterval(watcher);
       job.endedAt = new Date().toISOString();

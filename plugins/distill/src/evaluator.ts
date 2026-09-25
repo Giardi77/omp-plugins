@@ -132,8 +132,12 @@ export interface EvaluatorSdkLike {
   SessionManager: { inMemory(cwd?: string): EvaluatorSessionManager };
   Settings: {
     loadReadOnly(options: EvaluatorSettingsOptions): Promise<EvaluatorSettings>;
-    /** The host's live settings; absent only on a host that never initialized one. */
-    instance?: { get(path: string): unknown };
+    /**
+     * The host's live settings; absent only on a host that never initialized one. `get` is
+     * optional on purpose: 18.3.1 removed `Settings.get(path)`, so a host may hand over an
+     * instance with no path reader — probed for, never assumed.
+     */
+    instance?: { get?(path: string): unknown };
   };
 }
 
@@ -155,9 +159,16 @@ export async function evaluatorSettings(sdk: EvaluatorSdkLike, agentDir: string)
     );
   }
   const overrides: Record<string, unknown> = { "advisor.enabled": false };
-  for (const key of CAPABILITY_SETTING_KEYS) {
-    const value = sdk.Settings.instance?.get(key);
-    if (Array.isArray(value)) overrides[key] = value;
+  // Read through `get` only where the host still has one. 18.3.1 removed `Settings.get(path)`, and
+  // nothing is lost by carrying nothing there: the evaluator session is built with
+  // `parentTaskPrefix`, which stops it from taking over the process's capability state at all
+  // (18.3.1's `bindProcessState`), so the project's view of those gates is never displaced.
+  const instance = sdk.Settings.instance;
+  if (typeof instance?.get === "function") {
+    for (const key of CAPABILITY_SETTING_KEYS) {
+      const value = instance.get(key);
+      if (Array.isArray(value)) overrides[key] = value;
+    }
   }
   return await sdk.Settings.loadReadOnly({ cwd: agentDir, agentDir, overrides });
 }

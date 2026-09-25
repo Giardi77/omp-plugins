@@ -51,7 +51,7 @@ interface Harness {
   scan: { plans: ScanSpawnPlan[] };
 }
 
-function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harness {
+function harness(options: { evaluate?: boolean; agentDir?: string; settingsError?: string } = {}): Harness {
   const commands: Record<string, RegisteredCommand> = {};
   const sessionStart: Handler[] = [];
   const labels: string[] = [];
@@ -72,7 +72,14 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
       VERSION: "18.3.0",
       getAgentDir: () => options.agentDir ?? "/Users/giardi/.omp/agent",
       SessionManager: { inMemory: () => ({ memory: true }) },
-      Settings: { loadReadOnly: async () => ({ isolated: true }) },
+      Settings: {
+        loadReadOnly: async () => {
+          // Where a real host's settings load can fail: a scan on 18.3.1 died here with a
+          // TypeError, because `Settings.get` no longer exists.
+          if (options.settingsError !== undefined) throw new Error(options.settingsError);
+          return { isolated: true };
+        },
+      },
       createAgentSession: async (createOptions: CreateAgentSessionOptions) => {
         created.push(createOptions);
         const tools = {
@@ -479,6 +486,30 @@ describe("the distill command", () => {
       "aaaa1111-2222-7000-8000-000000000060",
       "aaaa1111-3333-7000-8000-000000000061",
     ]);
+  });
+
+  test("a runner that throws leaves a failed journal, not a running one", async () => {
+    const { project, sessionDir, agentDir } = await projectWithSession();
+    const paths = distillPaths(project);
+    await setupProject(project);
+
+    const failure = "sdk.Settings.instance?.get is not a function";
+    const { api, commands } = harness({ evaluate: true, agentDir, settingsError: failure });
+    distillExtension(api);
+    const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
+
+    const output = await captureStdout(async () => {
+      await commands.distill!.handler("scan --limit 1", ctx);
+      await commands.distill!.handler("_job", ctx);
+    });
+
+    // Loud to the operator, and honest on disk: the runner is gone, so nothing may read as live.
+    expect(output).toContain(`distill failed: ${failure}`);
+    const job = await readScanJob(paths);
+    expect(job?.status).toBe("failed");
+    expect(job?.endedAt).toBeDefined();
+    expect(job?.errors.join(" ")).toContain(failure);
+    expect(job?.sessions.map(session => session.status)).toEqual(["failed"]);
   });
 
   test("a retry's inventory carries only the traces still open", async () => {
