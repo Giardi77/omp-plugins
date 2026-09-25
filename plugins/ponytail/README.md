@@ -39,11 +39,20 @@ level is active; the level persists with the session.
 `🐴 <mode>` sits next to the `mode` segment — accent while the agent runs, muted when idle. It rides
 every built-in preset except `ascii` (which stays emoji-free), so no config change is needed.
 
-With `statusLine.preset: custom` the bar renders your own segment list and OMP validates those ids
-against its catalog, which has no `ponytail` id — there the mode arrives as a hook line under the
-composer instead (same as the upstream extension). To get it back inline, add OMP's own `status`
-segment to `leftSegments` and set `showHookStatus: false`; `status` renders hook statuses inline, so
-this extension's entry lands in the bar with no hook line under it.
+With `statusLine.preset: custom` the bar renders your own segment list, so add `ponytail` where you
+want the chip — right after `mode` to match the built-in presets:
+
+```yaml
+statusLine:
+  leftSegments: [model, mode, ponytail, git, path]
+```
+
+OMP has no such id in its segment catalog, which is fine: an unknown entry in a configured list
+loads unchanged and only warns once per entry, and this extension registers the `ponytail` segment
+the bar then draws. (Skip the list edit and the mode arrives as a hook line under the composer
+instead, like upstream.) Prefer a warning-free bar? Add OMP's own `status` segment instead and set
+`showHookStatus: false` — it renders hook statuses inline, so the chip lands in the bar with no hook
+line under it.
 
 `PONYTAIL_HIDE_STATUS=1` or `{"hideStatus": true}` hides the chip and keeps the ruleset active.
 

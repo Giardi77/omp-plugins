@@ -24,7 +24,7 @@
     },
     "plugins/ponytail": {
       "name": "omp-ponytail-extension",
-      "version": "4.10.0",
+      "version": "4.10.2",
     },
     "plugins/setup-skills": {
       "name": "omp-setup-skills-extension",

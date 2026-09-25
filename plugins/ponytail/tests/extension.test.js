@@ -264,6 +264,28 @@ test("a custom preset in the project layer wins over the global layer", async ()
   assert.equal(statusWrites.at(-1), "🐴 lite");
 }));
 
+test("a custom list that names `ponytail` gets the chip inline, no hook line", async () => withTempConfig(async () => {
+  // Unknown entries load unchanged (one warning per entry), so a hand-written id
+  // reaches the renderer: our registered segment draws it, no hook line needed.
+  const { events, host } = createPiHarness({
+    settings: {
+      getProjectSettings: () => ({ statusLine: { preset: "custom", leftSegments: ["model", "mode", "ponytail", "git"] } }),
+      getGlobalSettings: () => ({}),
+    },
+  });
+  const statusWrites = [];
+  const ctx = createCommandContext({
+    sessionManager: { getEntries: () => [{ type: "custom", customType: "ponytail-mode", data: { mode: "ultra" } }] },
+    ui: { notify() {}, setStatus: (_key, text) => statusWrites.push(text) },
+  });
+
+  await events.get("session_start")({ reason: "resume" }, ctx);
+  await events.get("agent_start")({}, ctx);
+
+  assert.equal(host.SEGMENTS.ponytail.render().content, "🐴 ultra");
+  assert.deepEqual([...new Set(statusWrites)], [undefined]);
+}));
+
 test("preset hosts keep the hook line empty (the segment owns the indicator)", async () => withTempConfig(async () => {
   const { events } = createPiHarness({
     settings: {

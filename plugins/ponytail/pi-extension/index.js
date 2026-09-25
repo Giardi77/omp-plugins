@@ -61,24 +61,29 @@ export function parsePonytailCommand(text, defaultMode = DEFAULT_MODE) {
 export { writeDefaultMode };
 
 /**
- * Whether the bar renders segments from the preset tables we can splice into.
- * A `custom` preset skips them entirely and reads `statusLine.leftSegments`
- * from settings instead — a list we cannot extend, because the setting's items
- * are validated against the host's segment catalog (no `ponytail` id).
- *
- * Reads the config layers only: the extension API has no effective-value
- * getter, so a `--config` overlay or a runtime override naming `custom` is
- * missed. Worst case is a duplicate indicator, never a crash.
+ * The `statusLine` values this extension can see: project layer over global.
+ * The extension API has no effective-value getter, so a `--config` overlay or a
+ * runtime override is missed; worst case is a duplicate indicator, never a crash.
  * ponytail: layer read, use the effective-value API if omp ever exposes one.
  */
-function usesPresetSegments(settings) {
+function configuredStatusLine(settings) {
   try {
-    const preset =
-      settings?.getProjectSettings?.()?.statusLine?.preset ?? settings?.getGlobalSettings?.()?.statusLine?.preset;
-    return preset !== "custom";
+    return settings?.getProjectSettings?.()?.statusLine ?? settings?.getGlobalSettings?.()?.statusLine ?? {};
   } catch {
-    return true;
+    return {};
   }
+}
+
+/**
+ * Whether the bar draws the chip from the segment registered below. Built-in
+ * presets do — we splice `ponytail` into their tables — and so does a `custom`
+ * preset whose own list names it: an unknown entry loads unchanged (one warning
+ * per entry), so the id never has to enter the host's segment catalog.
+ */
+function rendersInlineSegment(settings) {
+  const statusLine = configuredStatusLine(settings);
+  if (statusLine.preset !== "custom") return true;
+  return Array.isArray(statusLine.leftSegments) && statusLine.leftSegments.includes("ponytail");
 }
 
 export default function ponytailExtension(pi) {
@@ -114,7 +119,7 @@ export default function ponytailExtension(pi) {
   const hostSegments = pi.pi?.SEGMENTS;
   const hostPresets = pi.pi?.STATUS_LINE_PRESETS;
   const hasStatusLine = Boolean(hostSegments && hostPresets);
-  const inlineStatus = hasStatusLine && usesPresetSegments(pi.pi?.settings);
+  const inlineStatus = hasStatusLine && rendersInlineSegment(pi.pi?.settings);
 
   if (hasStatusLine) {
     if (!hostSegments.ponytail) {
