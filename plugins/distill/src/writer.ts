@@ -91,9 +91,8 @@ export async function planWrite(
   if (removes === undefined || removes === "") return plan;
 
   // A trim applies to the lesson's own file, which is the first write of every plan: the reference
-  // itself for a reference, the surface for everything else. A reference's pointer write is
-  // dropped with it — a lesson that trims a reference is not the lesson that minted it, and one
-  // that tried to would be refused below for trimming a file that does not exist yet.
+  // itself for a reference, the surface for everything else. Trimming a file that is not there yet
+  // is refused below — a removal is not the lesson that mints a file.
   const target = plan.writes[0];
   if (target === undefined) return plan;
   return { ...plan, writes: await spliceWrite(target, removes, lesson.body) };
@@ -251,7 +250,14 @@ async function planReference(paths: DistillPaths, lesson: WritableLesson, now: D
 
   const referencePath = path.join(path.dirname(skillPath), "references", `${sanitizeSkillName(name)}.md`);
   if (await fileExists(referencePath)) {
-    throw new Error(`.omp/skills/${slug}/references/${name}.md already exists; propose an edit to it instead.`);
+    if ((lesson.removes ?? "").trim() === "") {
+      throw new Error(
+        `.omp/skills/${slug}/references/${name}.md already exists; quote the lines to take out in \`removes\` to trim it, or propose the lesson against the skill that owns it.`,
+      );
+    }
+    // A trim of a reference is a write to the reference and nothing else: the pointer into the
+    // skill is already there, and a lesson that edits a file is not the lesson that minted it.
+    return { target: lesson.target, writes: [{ path: referencePath, mode: "append", text: lesson.body }] };
   }
 
   const referenceText = `# ${lesson.title.trim()}\n\n${lesson.body.trim()}\n`;

@@ -38,10 +38,20 @@ explicit `[]` and a fixed `systemPrompt` replaces every generated block, but wit
 the host resolves the **project's** own `.omp/settings.json` — enough for a project to attach an
 advisor (`advisor.enabled`, fed its own `WATCHDOG.md`/`WATCHDOG.yml`), widen what the read tools may
 open (`workspace.additionalDirectories`) and gate them (`tools.approval.*`). The evaluator therefore
-loads its own settings from the agent dir through `Settings.loadIsolated` — the host's documented way
-to get a settings instance without touching the process-global one the main session holds — with
-`advisor.enabled` forced off, and refuses to run when the host exposes no such entry point rather
-than fail the scan with a `TypeError`. Verified on omp 18.3.0 against a project whose settings enable
+loads its own settings through `Settings.loadReadOnly`, with the *agent dir* as its cwd: the
+read-only path, so a scan neither opens the host's settings storage nor can write the operator's
+config as a side effect, and the project layer on the walk-up is never read. `advisor.enabled` is
+forced off on top, because the operator's own layer may enable it.
+
+Three keys ride across from the host's live settings — `disabledProviders`, `enabledProviders`,
+`disabledExtensions` — because every session creation calls the host's `initializeWithSettings`,
+which repoints the process's capability settings at the instance it was handed and rebuilds those
+three from it. A project-less instance would otherwise change what the **main** session sees on its
+next capability load (a rule or extension reappearing after a scan), and those three gate what
+exists rather than what a session is told. A host without `Settings.loadReadOnly` is refused with
+that reason rather than failing the scan with a `TypeError`.
+
+Verified on omp 18.3.0 against a project whose settings enable
 an advisor: the evaluator reports `isAdvisorEnabled() === false`, and its composed system prompt is
 byte-identical to the shipped `templates/evaluator.md` while a canary string placed in the project's
 `AGENTS.md`, `.omp/APPEND_SYSTEM.md`, rules, skills, agents and `WATCHDOG.md`/`WATCHDOG.yml` appears

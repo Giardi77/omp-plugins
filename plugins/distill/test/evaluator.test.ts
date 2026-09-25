@@ -23,6 +23,13 @@ const SESSION_ID = "abc12345-1111-7000-8000-000000000050";
 /** Where the fake host keeps its own settings — never inside the project. */
 const AGENT_DIR = "/home/operator/.omp";
 
+/** The host's process-global capability gates, as the evaluator finds them on its way in. */
+const CAPABILITY_VALUES: Record<string, unknown> = {
+  disabledProviders: ["loud-provider"],
+  enabledProviders: ["only-this-one"],
+  disabledExtensions: ["noisy-plugin"],
+};
+
 async function fixtureBundle(): Promise<{ paths: DistillPaths; bundle: TraceBundle }> {
   const dir = await makeTempDir("omp-distill-evaluator-");
   const paths = distillPaths(`${dir}/project`);
@@ -124,10 +131,11 @@ function scriptedSdk(script: Script) {
     VERSION: "18.3.0",
     SessionManager: { inMemory: () => ({ memory: true }) as never },
     Settings: {
-      loadIsolated: async (options: EvaluatorSettingsOptions) => {
+      loadReadOnly: async (options: EvaluatorSettingsOptions) => {
         settingsLoads.push(options);
         return isolatedSettings;
       },
+      instance: { get: (path: string) => CAPABILITY_VALUES[path] },
     },
     createAgentSession: async (options: CreateAgentSessionOptions) => {
       created.push(options);
@@ -212,14 +220,27 @@ describe("sealing", () => {
     expect(fake.settingsLoads[0]?.agentDir).toBe(AGENT_DIR);
     // A project `.omp/settings.json` must not be read: `cwd` is what the host discovers it from.
     expect(fake.settingsLoads[0]?.cwd).not.toBe(paths.projectRoot);
-    expect(fake.settingsLoads[0]?.overrides).toEqual({ "advisor.enabled": false });
+    expect(fake.settingsLoads[0]?.overrides).toEqual({
+      "advisor.enabled": false,
+      ...CAPABILITY_VALUES,
+    });
     expect(fake.created[0]?.settings).toBe(fake.isolatedSettings);
+  });
+
+  test("a host with no live settings instance still gets the evaluator's own", async () => {
+    const fake = scriptedSdk({ calls: [readTail, finish] });
+    const sdk = { ...fake.sdk, Settings: { ...fake.sdk.Settings, instance: undefined } };
+    await run({ calls: [readTail, finish] }, { sdk });
+
+    // Nothing is invented for the capability gates: an override of `undefined` would hide the
+    // schema default from the host's own capability rebuild.
+    expect(fake.settingsLoads[0]?.overrides).toEqual({ "advisor.enabled": false });
   });
 
   test("a host whose SDK cannot load settings in isolation is refused, not run unsealed", async () => {
     const fake = scriptedSdk({ calls: [readTail, finish] });
     await expect(run({ calls: [readTail, finish] }, { sdk: { ...fake.sdk, Settings: {} as never } })).rejects.toThrow(
-      "no Settings.loadIsolated",
+      "no Settings.loadReadOnly",
     );
   });
 

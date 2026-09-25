@@ -116,12 +116,50 @@ export interface EvaluatorSettingsOptions {
   overrides?: Record<string, unknown>;
 }
 
+/**
+ * The process-global capability gates. Every session creation calls the host's
+ * `initializeWithSettings`, which repoints the process's capability settings at the instance it was
+ * handed and rebuilds these three from it — so an evaluator holding a project-less instance would
+ * otherwise drop the project's view of them for the *main* session's next capability load. Carried
+ * across deliberately: they gate what exists (providers, extensions), not what a session is told.
+ */
+const CAPABILITY_SETTING_KEYS = ["disabledProviders", "enabledProviders", "disabledExtensions"] as const;
+
 /** The injected SDK surface; `pi.pi` satisfies it. */
 export interface EvaluatorSdkLike {
   VERSION: string;
   createAgentSession(options: CreateAgentSessionOptions): Promise<{ session: EvaluatorSessionLike }>;
   SessionManager: { inMemory(cwd?: string): EvaluatorSessionManager };
-  Settings: { loadIsolated(options: EvaluatorSettingsOptions): Promise<EvaluatorSettings> };
+  Settings: {
+    loadReadOnly(options: EvaluatorSettingsOptions): Promise<EvaluatorSettings>;
+    /** The host's live settings; absent only on a host that never initialized one. */
+    instance?: { get(path: string): unknown };
+  };
+}
+
+/**
+ * The settings the evaluator session runs under (ADR-0007). Read-only, so a scan neither opens the
+ * host's settings storage nor can write the operator's config as a side effect; loaded with the
+ * *agent dir* as its cwd, so the project's own `.omp/settings.json` layer is never read. Settings
+ * are not inert: `advisor.enabled` attaches a second model that reviews every turn of this session,
+ * `workspace.additionalDirectories` widens what the read tools may open, and `tools.approval.*` can
+ * gate them. The advisor is forced off as well, because the operator's own layer may enable it.
+ *
+ * Asserted rather than trusted, like the rest of the seal: a host with no read-only load would
+ * otherwise fail a scan with a `TypeError` instead of saying what it is missing.
+ */
+export async function evaluatorSettings(sdk: EvaluatorSdkLike, agentDir: string): Promise<EvaluatorSettings> {
+  if (typeof sdk.Settings?.loadReadOnly !== "function") {
+    throw new Error(
+      "this host's SDK has no Settings.loadReadOnly, so the evaluator cannot be given read-only settings of its own; distill will not run it against the project's",
+    );
+  }
+  const overrides: Record<string, unknown> = { "advisor.enabled": false };
+  for (const key of CAPABILITY_SETTING_KEYS) {
+    const value = sdk.Settings.instance?.get(key);
+    if (Array.isArray(value)) overrides[key] = value;
+  }
+  return await sdk.Settings.loadReadOnly({ cwd: agentDir, agentDir, overrides });
 }
 
 export type ProposeLessonsTool = EvaluatorTool;
@@ -367,20 +405,8 @@ export async function runEvaluation(input: RunEvaluationInput): Promise<Evaluati
   // `advisor.enabled` attaches a second model that reviews every turn (with the project's
   // `WATCHDOG.md`/`WATCHDOG.yml` fed to it), `workspace.additionalDirectories` widens what the
   // read tools can open, `tools.approval.*` can gate them outright — and none of it should steer
-  // a session whose only input is a trace. Loading from the agent dir leaves the project layer
-  // unread; the advisor is turned off here because the operator's own layer may enable it too.
-  // Asserted rather than trusted, like the rest of the seal: a host older than this option would
-  // otherwise fail the scan with a TypeError instead of saying what it is missing.
-  if (typeof input.sdk.Settings?.loadIsolated !== "function") {
-    throw new Error(
-      "this host's SDK has no Settings.loadIsolated, so the evaluator cannot be given settings of its own; distill will not run it against the project's",
-    );
-  }
-  const settings = await input.sdk.Settings.loadIsolated({
-    cwd: input.agentDir,
-    agentDir: input.agentDir,
-    overrides: { "advisor.enabled": false },
-  });
+  // a session whose only input is a trace. See `evaluatorSettings` for what that costs a host.
+  const settings = await evaluatorSettings(input.sdk, input.agentDir);
 
   const session = (
     await input.sdk.createAgentSession(

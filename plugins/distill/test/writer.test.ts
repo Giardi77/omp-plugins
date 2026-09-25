@@ -128,6 +128,37 @@ describe("skill references", () => {
       '"<skill-slug>/<reference-name>"',
     );
   });
+
+  test("an existing reference is trimmed by quoting its lines, without a second pointer", async () => {
+    const paths = await project();
+    const skillFile = await writeFile(
+      skillPath(paths, "retry-helper"),
+      "---\ndescription: Retries\n---\n\n## References\n\n- [`references/ci-load.md`](references/ci-load.md) — CI load\n",
+    );
+    const referenceFile = await writeFile(
+      path.join(paths.projectRoot, ".omp", "skills", "retry-helper", "references", "ci-load.md"),
+      "# CI load\n\nThe suite flaps under CI load.\n\nSleep at least 250ms between retry attempts.\n",
+    );
+
+    const plan = await planWrite(
+      paths,
+      lesson({
+        kind: "skill_reference",
+        target: "retry-helper/ci-load",
+        body: "Sleep at least 250ms; 100ms flaps under CI load.",
+        removes: "The suite flaps under CI load.\n\nSleep at least 250ms between retry attempts.",
+      }),
+    );
+
+    expect(plan.writes.map(write => write.mode)).toEqual(["splice"]);
+    expect(plan.writes[0]?.path).toBe(referenceFile);
+    await applyWrite(paths, plan);
+    expect(await Bun.file(referenceFile).text()).toBe(
+      "# CI load\n\nSleep at least 250ms; 100ms flaps under CI load.\n",
+    );
+    // The pointer into SKILL.md is the mint's write, not the trim's.
+    expect(await Bun.file(skillFile).text()).toContain("- [`references/ci-load.md`](references/ci-load.md) — CI load\n");
+  });
 });
 
 describe("rules", () => {

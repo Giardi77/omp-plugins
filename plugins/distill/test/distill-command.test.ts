@@ -72,7 +72,7 @@ function harness(options: { evaluate?: boolean; agentDir?: string } = {}): Harne
       VERSION: "18.3.0",
       getAgentDir: () => options.agentDir ?? "/Users/giardi/.omp/agent",
       SessionManager: { inMemory: () => ({ memory: true }) },
-      Settings: { loadIsolated: async () => ({ isolated: true }) },
+      Settings: { loadReadOnly: async () => ({ isolated: true }) },
       createAgentSession: async (createOptions: CreateAgentSessionOptions) => {
         created.push(createOptions);
         const tools = {
