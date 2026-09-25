@@ -29,6 +29,7 @@ If OMP is already running, restart it after installing so the extension is loade
 
 | Plugin | Description |
 | --- | --- |
+| [`omp-ponytail-extension`](plugins/ponytail) | Lazy senior dev mode with `/ponytail`: ruleset, six skills, status-line chip. Forked from [@dietrichgebert/ponytail](https://github.com/DietrichGebert/ponytail). |
 | [`omp-setup-skills-extension`](plugins/setup-skills) | Select enabled skills for an OMP project with `/setup-skills`. |
 | [`omp-distill-extension`](plugins/distill) | Turn recorded sessions into reviewed project knowledge with `/distill`. |
 
@@ -45,6 +46,7 @@ omp plugin upgrade
 
 ```text
 .omp-plugin/marketplace.json      Marketplace catalog
+plugins/ponytail/                 ponytail plugin package
 plugins/setup-skills/             setup-skills plugin package
 plugins/distill/                  distill plugin package
 plugins/telegram/                 telegram plugin package

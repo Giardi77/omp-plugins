@@ -1,0 +1,28 @@
+{
+  "name": "omp-ponytail-extension",
+  "version": "4.10.0",
+  "type": "module",
+  "description": "Ponytail: lazy senior dev mode for OMP agents, forked from @dietrichgebert/ponytail.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Giardi77/omp-plugins.git",
+    "directory": "plugins/ponytail"
+  },
+  "homepage": "https://github.com/Giardi77/omp-plugins/tree/main/plugins/ponytail",
+  "keywords": [
+    "omp",
+    "oh-my-pi",
+    "extension",
+    "skills",
+    "ponytail"
+  ],
+  "license": "MIT",
+  "omp": {
+    "extensions": [
+      "./pi-extension/index.js"
+    ]
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
