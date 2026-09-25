@@ -14,7 +14,9 @@ needs a fourth spelling.
 
 The kind vocabulary is one name per surface: `skill` (the slug decides patch or mint, so the
 proposer cannot duplicate a skill by proposing it twice), `skill_reference` (the reference file plus
-the line in `SKILL.md` that points at it), `rule`, `agent_prompt`, and `append_system`. The earlier
+the line in `SKILL.md` that points at it — the pointer belongs to the mint: a reference that already
+exists is trimmed by quoting its lines, and only the reference is written), `rule`, `agent_prompt`,
+and `append_system`. The earlier
 `patch_skill`/`new_skill` split is gone: "does this slug exist?" is a fact about the filesystem, and
 the writer answers it; leaving it to the model asked it to guess at something it cannot see.
 

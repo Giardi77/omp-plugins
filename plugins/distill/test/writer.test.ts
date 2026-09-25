@@ -483,3 +483,57 @@ describe("applying a write", () => {
     await expect(applyWrite(paths2, await planWrite(paths2, lesson()))).rejects.toThrow("hard links");
   });
 });
+
+describe("two lessons on one file", () => {
+  // The review window approves one lesson at a time and re-plans the rest, so both of two lessons
+  // aimed at the same file must be planned against what the earlier approval left behind.
+  test("appends land in the order they were approved", async () => {
+    const paths = await project();
+    const filePath = await writeFile(skillPath(paths, "retry-helper"), "---\ndescription: Retries\n---\n\nHand-written prose.\n");
+    const first = lesson({ id: "aaaaaaa1", body: "Sleep at least 250ms between retry attempts." });
+    const second = lesson({ id: "aaaaaaa2", body: "Run the suite from the package root.", title: "Run tests from the package root" });
+
+    await applyWrite(paths, await planWrite(paths, first));
+    await applyWrite(paths, await planWrite(paths, second));
+
+    const content = await Bun.file(filePath).text();
+    const order = content.indexOf(first.body);
+    expect(order).toBeGreaterThan(-1);
+    expect(content.indexOf(second.body)).toBeGreaterThan(order);
+    expect(content.startsWith("---\ndescription: Retries\n---\n\nHand-written prose.\n")).toBe(true);
+  });
+
+  test("a trim sees the section the first lesson appended", async () => {
+    const paths = await project();
+    const filePath = await writeFile(skillPath(paths, "retry-helper"), "---\ndescription: Retries\n---\n\nStale workaround: sleep 100ms.\n");
+    const addition = lesson({ id: "bbbbbbb1", body: "Sleep at least 250ms between retry attempts." });
+    // Quotes a line that only exists once the first lesson has been written.
+    const trim = lesson({
+      id: "bbbbbbb2",
+      removes: "Sleep at least 250ms between retry attempts.",
+      body: "Sleep at least 250ms; 100ms flaps under CI load.",
+    });
+
+    await applyWrite(paths, await planWrite(paths, addition));
+    await applyWrite(paths, await planWrite(paths, trim));
+
+    const content = await Bun.file(filePath).text();
+    expect(content).toContain("Sleep at least 250ms; 100ms flaps under CI load.\n");
+    expect(content).not.toContain("Sleep at least 250ms between retry attempts.\n");
+    expect(content).toContain("Stale workaround: sleep 100ms.\n");
+  });
+
+  test("a trim whose lines an earlier lesson removed fails loudly, and writes nothing", async () => {
+    const paths = await project();
+    const filePath = await writeFile(skillPath(paths, "retry-helper"), "---\ndescription: Retries\n---\n\nStale workaround: sleep 100ms.\n");
+    const removal = lesson({ id: "ccccccc1", removes: "Stale workaround: sleep 100ms.", body: "" });
+    const later = lesson({ id: "ccccccc2", removes: "Stale workaround: sleep 100ms.", body: "Sleep at least 250ms." });
+
+    await applyWrite(paths, await planWrite(paths, removal));
+    const before = await Bun.file(filePath).text();
+    // Planned at approval time, against the file the earlier approval left: the refusal is louder
+    // than a wrong splice, and nothing is written.
+    await expect(planWrite(paths, later)).rejects.toThrow("does not contain the text this lesson removes");
+    expect(await Bun.file(filePath).text()).toBe(before);
+  });
+});

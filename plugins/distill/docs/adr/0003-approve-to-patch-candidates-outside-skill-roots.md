@@ -14,11 +14,19 @@ overlap check it performed and the exact diff it will write.
 project (rejected: a second skill root for no gain, and the user-level `~/.agents/skills` leaks
 into every workspace that walks up to home).
 
-**Consequences**: patches are append-only, in a dated section, so existing hand-written prose is
-never rewritten; and every proposed lesson carries an evidence list naming the records it came from,
-which is validated against the trace before the lesson reaches the queue. The set of surfaces an
+**Amended 2026-09-25**: "append-only" is no longer the whole posture. A lesson may carry `removes` —
+lines quoted as read, spliced out of the target with the body (if any) where they were — so a
+surface that has grown past what it returns can be trimmed instead of added to (ADR-0016). What
+survives untouched is the reason for the original rule: an approval never rewrites a file from the
+lesson's body, never touches frontmatter, and never deletes a file. Appends and mints still work
+exactly as described below.
+
+**Consequences**: a patch adds a section, or takes quoted lines out (the amendment above), and never
+rewrites the file it lands in, so hand-written prose the lesson did not quote survives whole; and
+every proposed lesson carries an evidence list naming the records it came from, which is validated
+against the trace before the lesson reaches the queue. The set of surfaces an
 approval can reach is wider than the two this ADR named — rules, skill references and
-`APPEND_SYSTEM.md` joined them in ADR-0012; this ADR's posture (edit before adding, append-only,
+`APPEND_SYSTEM.md` joined them in ADR-0012; this ADR's posture (edit before adding, add or trim,
 the loader's own constraints) is what all of them inherit.
 
 A minted skill has to survive the loader, which drops it **silently** in one case and rejects it
