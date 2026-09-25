@@ -65,3 +65,8 @@ title heading of its own — a mint writes the frontmatter description, `planRef
 `# <title>` above the body — and `##` is the depth the plugin itself uses for the `## References` line
 it adds to `SKILL.md`. The paragraph this ADR's Consequences describes still stands one line above the
 section that took over its job.
+
+The headline claim is the narrower half of the rule now: "the instruction alone" still means nothing
+but the instruction — no preamble, no filler, no account of the session — while an injected body may
+be *structured* where structure is the right case (a heading where the file's own sections have them,
+a list where the instruction is a sequence). Read together: never padded, sometimes shaped.

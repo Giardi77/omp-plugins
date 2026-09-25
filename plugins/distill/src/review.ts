@@ -603,18 +603,10 @@ export class ReviewWindow implements Component {
       lines.push("", muted(theme, "c shows every change in this batch"));
     }
 
-    // The lesson as written — unless it is a pure trim, where the change above *is* the lesson and
-    // the block would be an empty heading over nothing.
-    if (lesson.body.trim() !== "") {
-      lines.push("", muted(theme, "The lesson:"), ...wrapTextWithAnsi(lesson.body, width));
-    }
-
+    // The lesson body is not repeated here: every write is already a diff above, and for a mint
+    // that diff is the whole file — printing the body under a heading was the same text twice.
     if (lesson.rationale.trim() !== "") {
-      lines.push(
-        "",
-        muted(theme, "Why keep it:"),
-        ...wrapTextWithAnsi(lesson.rationale, width).map(line => color(theme, "dim", line)),
-      );
+      lines.push("", muted(theme, "Why keep it:"), ...wrapTextWithAnsi(lesson.rationale, width));
     }
 
     if (lesson.citations.length > 0) {

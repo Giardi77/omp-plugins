@@ -100,7 +100,12 @@ interface Sit extends Pending {
 }
 
 /** Rows the window is told it has: enough for the detail pane unless a test wants the cap. */
-function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}, rows = 80): Sit {
+function sit(
+  entries: ReviewEntry[],
+  overrides: Partial<ReviewHandlers> = {},
+  rows = 80,
+  paint: ReviewTheme = theme,
+): Sit {
   const pending = pendingDecisions();
   const accepted: StoredLesson[] = [];
   const denied: [string, string | undefined][] = [];
@@ -109,7 +114,7 @@ function sit(entries: ReviewEntry[], overrides: Partial<ReviewHandlers> = {}, ro
 
   const window = new ReviewWindow(
     entries,
-    theme,
+    paint,
     () => {
       renders += 1;
     },
@@ -211,17 +216,17 @@ function terminalContext(rows = 24): Terminal {
 }
 
 describe("ReviewWindow", () => {
-  test("lists the undecided lessons and shows the selected lesson: target, body, why, evidence ids", () => {
+  test("lists the undecided lessons and shows the selected lesson: target, why, evidence ids", () => {
     const review = sit([entry("one"), entry("two")]);
     const rendered = review.text();
 
     expect(review.listed()).toEqual(["one", "two"]);
     expect(rendered).toContain("skill · target: target-one");
     expect(rendered).toContain("Title one");
-    // The lesson itself, then why it is worth keeping — the rationale is invisible everywhere else,
-    // since the surfaces only ever get the body.
-    expect(rendered).toContain("The lesson:");
-    expect(rendered).toContain("Body of one.");
+    // Why it is worth keeping — the rationale is invisible everywhere else, since the surfaces only
+    // ever get the body, and the body itself is the diff above rather than a second copy here.
+    expect(rendered).not.toContain("The lesson:");
+    expect(rendered).not.toContain("Body of one.");
     expect(rendered).toContain("Why keep it:");
     expect(rendered).toContain("the same mistake came back three times");
     // The record ids always; the excerpts they stand for are one key away.
@@ -231,15 +236,14 @@ describe("ReviewWindow", () => {
 
     // Only the selected lesson is detailed.
     expect(rendered).not.toContain("skill · target: target-two");
-    expect(rendered).not.toContain("Body of two.");
   });
 
   test("moves with j/k and the arrow keys, and accepting the second lesson removes its row", async () => {
     const review = sit([entry("one"), entry("two")]);
     review.window.handleInput("j");
-    expect(review.text()).toContain("Body of two.");
+    expect(review.text()).toContain("skill · target: target-two");
     review.window.handleInput(UP);
-    expect(review.text()).toContain("Body of one.");
+    expect(review.text()).toContain("skill · target: target-one");
     review.window.handleInput(DOWN);
     review.window.handleInput(DOWN);
     expect(review.renders).toBeGreaterThan(0);
@@ -294,7 +298,7 @@ describe("ReviewWindow", () => {
 
     // Back on the list: the arrow keys move again.
     review.window.handleInput(DOWN);
-    expect(review.text()).toContain("Body of two.");
+    expect(review.text()).toContain("skill · target: target-two");
   });
 
   test("a handler error keeps the row and renders the message", async () => {
@@ -338,7 +342,7 @@ describe("ReviewWindow", () => {
     const review = sit([entry("one"), { ...entry("two"), lesson: lesson("two", { state: "approved" }) }]);
 
     expect(review.listed()).toEqual(["one"]);
-    expect(review.text()).not.toContain("Body of two.");
+    expect(review.text()).not.toContain("skill · target: target-two");
   });
 
   test("q closes with the accumulated outcome", async () => {
@@ -448,9 +452,12 @@ describe("ReviewWindow", () => {
   });
 
   /** A lesson whose detail is longer than any terminal: 40 lines of body plus the rest of the pane. */
+  /** Tall enough to overflow its pane: the rationale is the longest thing the pane still prints. */
   function tall(): ReviewEntry {
     return entry("one", {
-      lesson: lesson("one", { body: Array.from({ length: 40 }, (_unused, index) => `body line ${index}`).join("\n") }),
+      lesson: lesson("one", {
+        rationale: Array.from({ length: 40 }, (_unused, index) => `why line ${index}`).join("\n"),
+      }),
     });
   }
 
@@ -468,25 +475,25 @@ describe("ReviewWindow", () => {
 
   test("a detail taller than its pane scrolls inside it, a page at a time", () => {
     const roomy = sit([tall()], {}, 80);
-    expect(roomy.text()).toContain("body line 39");
+    expect(roomy.text()).toContain("why line 39");
 
     const tight = sit([tall()], {}, 24);
     const before = tight.text();
     // The top of the pane is what is shown, and the pane says how much is below it.
-    expect(before).toContain("The lesson:");
-    expect(before).not.toContain("body line 39");
+    expect(before).toContain("Why keep it:");
+    expect(before).not.toContain("why line 39");
     expect(before).toContain("more line(s) — PgUp/PgDn scrolls this pane");
 
     tight.window.handleInput(PAGE_DOWN);
     const scrolled = tight.text();
     expect(scrolled).not.toBe(before);
-    expect(scrolled).toContain("body line 12"); // one page on from the top of the pane
+    expect(scrolled).toContain("why line 12"); // one page on from the top of the pane
     expect(scrolled).toContain("above ·");
 
     // …and back, to the very top: the note names only what is below it.
     tight.window.handleInput(PAGE_UP);
     tight.window.handleInput(PAGE_UP);
-    expect(tight.text()).toContain("The lesson:");
+    expect(tight.text()).toContain("Why keep it:");
     expect(tight.text()).toContain("more line(s) — PgUp/PgDn");
     expect(tight.text()).not.toContain("above");
   });
@@ -498,8 +505,25 @@ describe("ReviewWindow", () => {
 
     expect(at("2 lesson(s)")).toBeGreaterThan(-1);
     expect(at("❯")).toBeGreaterThan(at("2 lesson(s)"));
-    expect(at("The lesson:")).toBeGreaterThan(at("❯"));
-    expect(at("q quit")).toBeGreaterThan(at("The lesson:"));
+    expect(at("Why keep it:")).toBeGreaterThan(at("❯"));
+    expect(at("q quit")).toBeGreaterThan(at("Why keep it:"));
+  });
+
+  test("the rationale reads at full contrast; only the evidence excerpts are dim", () => {
+    const marked: ReviewTheme = {
+      fg: (name, text) => (name === "dim" ? `<dim>${text}</dim>` : text),
+      bg: (_name, text) => text,
+      bold: text => text,
+    };
+    const review = sit([entry("one")], {}, 80, marked);
+
+    expect(review.text()).toContain("Why keep it:");
+    expect(review.text()).toContain("the same mistake came back three times");
+    expect(review.text()).not.toContain("<dim>the same mistake");
+
+    // The excerpts keep it: they are the longest, least often needed part of the pane.
+    review.window.handleInput("e");
+    expect(review.text()).toContain("<dim>");
   });
 
   test("shows a lesson's change as a diff of the file it writes", () => {
