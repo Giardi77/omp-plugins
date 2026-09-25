@@ -1,6 +1,6 @@
 {
   "name": "omp-distill-extension",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "description": "OMP extension that turns captured sessions into reviewed project knowledge.",
   "repository": {

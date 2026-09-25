@@ -21,10 +21,12 @@ So the window is now, in reading order:
    question "what is about to happen to my project" is sometimes asked about the batch rather than
    the lesson.
 
-**Amended 2026-09-25**: the pane no longer prints the lesson body under a heading of its own. Every
-write is already item 2 — for a mint the diff *is* the whole file — so the block was the same text
-twice, and the operator asked for it gone: "this section is redundant, i can already see it in the
-git-diff-like part of the TUI". The `rationale` is also no longer dimmed: it is the field the
+**Amended 2026-09-25**: the pane prints the lesson body only when there is no diff to read it in. A
+blocked lesson renders no change at all, so its body is the one place its text can be read — and
+`c`, which shows every change in the batch, covers the other corner where the preview is capped.
+Every other write is already item 2 — for a mint the diff *is* the whole file — so the block was the
+same text twice, and the operator asked for it gone: "this section is redundant, i can already see
+it in the git-diff-like part of the TUI". The `rationale` is also no longer dimmed: it is the field the
 decision turns on and the only place it is printed, so it reads at the terminal's own contrast with
 just its heading muted. The excerpts under `e` keep their dim, where it marks a hierarchy between a
 citation and its quote rather than making a decision harder to read.

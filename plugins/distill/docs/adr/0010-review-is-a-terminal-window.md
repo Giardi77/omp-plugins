@@ -8,6 +8,12 @@ deny with an optional one-line reason, `q` to quit. Accept writes immediately �
 shown the target file and the exact text — a decided lesson leaves the list, and anything untouched
 stays proposed.
 
+**Amended 2026-09-25**: the window also closes itself. When the last undecided lesson is decided —
+accepted or denied, and only once the write it triggered has settled — there is nothing left to
+review, so it closes rather than leaving the operator to press `q` over an empty list. `q` and `Esc`
+still leave early with the rest untouched, and the outcome tells the two apart: `quit: true` when a
+key closed it, `false` when the list ran out.
+
 **Considered Options**: a dialog loop built from `ui.select` and `ui.input`, with a lesson's detail
 carried in a dialog title — that is the only shape that works wherever `ctx.hasUI` is true, RPC
 included, and it was rejected because three dialogs per lesson is not a review surface; a headless

@@ -129,6 +129,7 @@ export class ReviewWindow implements Component {
   #inFlight: Promise<void> | undefined;
   /** A second `a` that arrived mid-write: the operator meant the next row, so it is replayed. */
   #queuedAccept = false;
+  #closed = false;
   #status = "";
   #statusColor: StatusColor = "muted";
   /** The evidence toggle: record ids always show, the excerpts are one key away. */
@@ -379,6 +380,13 @@ export class ReviewWindow implements Component {
     await this.#replan();
     this.#setStatus(success, "success");
 
+    // Nothing left to decide: the window's job is done, so it closes rather than waiting for `q`
+    // over an empty list. A failed decision returned above with its row still in place.
+    if (this.#entries.length === 0) {
+      this.#close(false);
+      return;
+    }
+
     if (this.#queuedAccept) {
       this.#queuedAccept = false;
       this.#accept();
@@ -424,15 +432,26 @@ export class ReviewWindow implements Component {
    * count it, and the caller's summary reads from the store the write is about to land in.
    */
   #finish(): void {
+    this.#close(true);
+  }
+
+  /**
+   * The one exit. `quit` is false when the window closed because there was nothing left to decide —
+   * a `q` pressed in that same tick has nothing to close, and `done` is called once either way.
+   */
+  #close(quit: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
     // Leaving wins over a press that never started: the in-flight decision is waited for,
     // a queued one is discarded.
     this.#queuedAccept = false;
     const inFlight = this.#inFlight;
+    const outcome = { ...this.#outcome, quit };
     if (inFlight === undefined) {
-      this.done({ ...this.#outcome, quit: true });
+      this.done(outcome);
       return;
     }
-    void inFlight.then(() => this.done({ ...this.#outcome, quit: true }));
+    void inFlight.then(() => this.done(outcome));
   }
 
   #renderBody(width: number): string[] {
@@ -603,8 +622,13 @@ export class ReviewWindow implements Component {
       lines.push("", muted(theme, "c shows every change in this batch"));
     }
 
-    // The lesson body is not repeated here: every write is already a diff above, and for a mint
-    // that diff is the whole file — printing the body under a heading was the same text twice.
+    // The body is printed only where the diff cannot speak: a blocked lesson renders no change at
+    // all, so this is the one place its text can be read. Anything else is already above as added
+    // lines — for a mint, the diff *is* the file — and printing it again was the same text twice.
+    if (lesson.body.trim() !== "" && entry.blocked !== undefined) {
+      lines.push("", muted(theme, "The lesson:"), ...wrapTextWithAnsi(lesson.body, width));
+    }
+
     if (lesson.rationale.trim() !== "") {
       lines.push("", muted(theme, "Why keep it:"), ...wrapTextWithAnsi(lesson.rationale, width));
     }

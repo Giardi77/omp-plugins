@@ -55,6 +55,9 @@ function pendingDecisions(): Pending {
       const batch = inFlight;
       inFlight = [];
       await Promise.allSettled(batch);
+      // The window resumes after the handler's promise, and a decision ends by removing the row,
+      // re-planning and possibly closing: flush that chain so what it did is what the test sees.
+      for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
     },
   };
 }
@@ -336,6 +339,10 @@ describe("ReviewWindow", () => {
     expect(review.text()).toContain("skill · target: target-one");
     expect(review.text()).toContain("blocked: no target skill in this project");
     expect(review.text()).toContain("cannot write: no target skill in this project");
+    // A blocked lesson renders no diff, so its body is the only place its text appears — the one
+    // case that keeps the block every other lesson dropped.
+    expect(review.text()).toContain("The lesson:");
+    expect(review.text()).toContain("Body of one.");
   });
 
   test("never lists an already decided lesson", () => {
@@ -368,6 +375,28 @@ describe("ReviewWindow", () => {
     expect(review.outcome).toEqual({ accepted: ["one"], denied: [], quit: true });
   });
 
+  test("closes itself when the last lesson is decided, and a late q has nothing to close", async () => {
+    const review = sit([entry("one")]);
+    review.window.handleInput("a");
+    await review.settled();
+
+    expect(review.outcome).toEqual({ accepted: ["one"], denied: [], quit: false });
+
+    // The window is closed: `q` cannot reopen it, and the outcome is not replaced.
+    review.window.handleInput("q");
+    await review.settled();
+    expect(review.outcome).toEqual({ accepted: ["one"], denied: [], quit: false });
+  });
+
+  test("closes itself when the last lesson is denied, reason and all", async () => {
+    const review = sit([entry("one")]);
+    review.window.handleInput("d");
+    review.window.handleInput(ENTER);
+    await review.settled();
+
+    expect(review.outcome).toEqual({ accepted: [], denied: ["one"], quit: false });
+  });
+
   test("a second accept mid-write approves the next lesson instead of being dropped", async () => {
     const first = Promise.withResolvers<string | undefined>();
     const second = Promise.withResolvers<string | undefined>();
@@ -389,9 +418,9 @@ describe("ReviewWindow", () => {
 
     second.resolve(undefined);
     await review.settled();
-    review.window.handleInput("q");
 
-    expect(review.outcome).toEqual({ accepted: ["one", "two"], denied: [], quit: true });
+    // The second accept was the last row, so the window closed on it rather than on a later key.
+    expect(review.outcome).toEqual({ accepted: ["one", "two"], denied: [], quit: false });
   });
 
   test("quitting drops a queued accept and waits for the one in flight", async () => {
@@ -423,14 +452,18 @@ describe("ReviewWindow", () => {
     expect(review.outcome).toEqual({ accepted: [], denied: [], quit: true });
   });
 
-  test("deciding the last lesson says so and keeps the window open", async () => {
-    const review = sit([entry("one")]);
-    review.window.handleInput("a");
-    await review.settled();
+  test("a window opened with nothing to decide says so, and waits to be closed", async () => {
+    // Not a state `review` reaches — it refuses to open with no proposals — but the class is
+    // exported, so the pane has to say something rather than paint a bare frame.
+    const review = sit([]);
 
     expect(review.listed()).toEqual([]);
     expect(review.text()).toContain("No undecided lessons left");
     expect(review.outcome).toBeUndefined();
+
+    review.window.handleInput("q");
+    await review.settled();
+    expect(review.outcome).toEqual({ accepted: [], denied: [], quit: true });
   });
 
   test("no rendered line is wider than the window", () => {
