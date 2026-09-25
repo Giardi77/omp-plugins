@@ -45,7 +45,7 @@ import {
 import { planFileChanges, type FileChange } from "./diff";
 import { runReview, type ReviewEntry } from "./review";
 import { listProjectSessions, sessionTraceIds, type SessionCandidate } from "./store";
-import { CLI_THINKING_LEVELS, parseCliThinkingLevel } from "./thinking";
+import { CLI_THINKING_LEVELS, parseCliThinkingLevel, supportedThinkingLevels } from "./thinking";
 import { renderInventory, type TraceBundle } from "./trace";
 import { fileExists, messageOf } from "./util";
 import { applyWrite, planWrite } from "./writer";
@@ -190,8 +190,11 @@ async function runSetup(ctx: ExtensionCommandContext, paths: DistillPaths, flags
     const choice = await pickModel(ctx);
     if (choice !== undefined) model = choice;
 
+    // The ladder belongs to the model that will run the evaluation: the one just chosen, or — when
+    // that picker was escaped — the session's own, which this config then leaves implicit.
+    const evaluatorModel = model === undefined ? ctx.model : ctx.models.resolve(model);
     const level = await ctx.ui.select("Evaluator thinking level — Esc leaves it to the model", [
-      ...CLI_THINKING_LEVELS,
+      ...supportedThinkingLevels(evaluatorModel),
     ]);
     if (level !== undefined) thinking = level;
   }

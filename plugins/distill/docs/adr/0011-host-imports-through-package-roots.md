@@ -25,6 +25,15 @@ does not export anywhere — the managed-skill rules (`autolearn/managed-skills`
 selectors (`pi-tui/thinking`); neither the SDK root nor `pi.pi` carries them — are mirrored in
 `src/skill-rules.ts` and `src/thinking.ts`, keeping the host's names, messages and limits verbatim.
 
+**Amended 2026-09-25**: the model's own thinking ladder needs no mirror, and never did. The host's
+`getSupportedEfforts` (`@oh-my-pi/pi-catalog/model-thinking`, 18.3.0) is `model.reasoning ?
+(model.thinking?.efforts ?? []) : []`, and the `Model` that `ctx.models.resolve` hands back carries
+exactly those fields — it is the same object the host's own `defaultThinkingLevel` row and its RPC
+surface read their levels from. So `/distill setup` offers `off`, the resolved evaluator model's
+efforts, then `auto`, and `src/thinking.ts` mirrors only the *CLI* vocabulary, which is a closed list
+the host owns and the config is validated against. A model the registry cannot resolve falls back to
+that vocabulary; either way the host clamps what it is handed.
+
 **Considered Options**: keep the subpath imports and wait for the host to register them — rejected,
 the plugin does not load at all in the meantime, and a load failure is silent to the operator; import
 the host modules by relative path into `node_modules` — rejected, the graph rewrite covers only the
