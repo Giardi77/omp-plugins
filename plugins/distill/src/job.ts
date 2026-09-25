@@ -56,8 +56,8 @@ export interface ScanJob {
   status: ScanJobStatus;
   startedAt: string;
   endedAt?: string;
-  /** The runner's process, written by the runner itself; the broker knows its own pid, and this is
-   * the pid for a scan running inside the operator's session. */
+  /** The runner's process: written by the spawn that started it, then by the runner itself, which
+   * is the only pid a scan running inside the operator's session has. */
   pid?: number;
   sessions: ScanJobSession[];
   lessons: number;

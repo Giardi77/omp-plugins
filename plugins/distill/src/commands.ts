@@ -167,8 +167,8 @@ export async function runDistillCommand(
       await runCancel(ctx, paths);
       return;
     case "_job":
-      // The daemon's own entry point, never typed by hand: /distill scan starts it through the
-      // host's broker with the journal already written.
+      // The runner's own entry point, never typed by hand: /distill scan spawns it as a detached
+      // `omp -p` with the journal already written.
       await runScanJob(pi, ctx, paths);
       return;
     case "review":
@@ -751,7 +751,7 @@ async function replanLesson(paths: DistillPaths, lesson: StoredLesson): Promise<
   return await planFileChanges(paths, plan.writes);
 }
 
-/** Stops a running scan: the runner first, the broker's hammer only if it will not go. */
+/** Stops a running scan: the cancel request the runner polls first, a signal only if it will not go. */
 async function runCancel(ctx: ExtensionCommandContext, paths: DistillPaths): Promise<void> {
   const outcome = await cancelScanJob(paths);
   if (outcome === "idle") {
@@ -759,7 +759,7 @@ async function runCancel(ctx: ExtensionCommandContext, paths: DistillPaths): Pro
     return;
   }
   if (outcome === "unreachable") {
-    notify(ctx, "Could not reach the scan's supervisor, so nothing was asked of it — `omp ps` shows it if it is still there.", "warning");
+    notify(ctx, "The scan did not stop: its runner still holds this project's scan lock, and it could not be signalled from here — /distill status names its pid while it is alive.", "warning");
     return;
   }
   notify(

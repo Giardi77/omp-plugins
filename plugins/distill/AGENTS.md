@@ -18,8 +18,8 @@ Turns recorded omp sessions into reviewed project knowledge. Domain language liv
   `tasks_completed`), answer validation, citation resolution, lesson identity
 - `src/diff.ts` — what approving a lesson writes, as diff rows: a create, an append, or a trim, with
   the file's own line numbers and neighbours — no diff algorithm, because nothing is ever replaced
-- `src/job.ts` — a scan as a background daemon: the journal `/distill status` reads, the runner's
-  entry point, and the host broker calls that start, list and stop it
+- `src/job.ts` — a scan as a background process: the journal `/distill status` reads, the runner's
+  entry point, and the detached spawn that starts it, signals it and waits for its lock
 - `src/bundle.ts` — one session's parent + subagent traces into one payload
 - `src/evaluator.ts` — the sealed in-process evaluator session, its surface assertion, the run
 - `src/lessons.ts` — lesson JSON + append-only ledger, eligibility, purge

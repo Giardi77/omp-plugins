@@ -94,7 +94,7 @@ describe("what /distill status says about a scan", () => {
     expect(line).toContain("pid 4242");
   });
 
-  test("running without a broker: a scan in this session says so from the lock alone", () => {
+  test("running without a detached spawn: a scan in this session says so from the lock alone", () => {
     const job = buildScanJob([target("one", "One")], new Date("2026-09-24T19:12:00.000Z"));
     job.status = "running";
     job.pid = 4242;

@@ -395,8 +395,8 @@ describe("the distill command", () => {
     distillExtension(api);
     const { ctx } = fakeContext({ cwd: project, mode: "print", sessionDir });
 
-    // `scan` resolves and hands off; `_job` is what the daemon runs. The spec is the contract with
-    // the host's broker, so it is asserted rather than assumed.
+    // `scan` resolves and hands off; `_job` is what the runner runs. The spec is the contract with
+    // the spawn, so it is asserted rather than assumed.
     const output = await captureStdout(async () => {
       await commands.distill!.handler("scan --limit 1", ctx);
       await commands.distill!.handler("_job", ctx);
@@ -609,14 +609,14 @@ describe("the distill command", () => {
     expect(again).toContain("No unevaluated sessions");
   });
 
-  test("a broker that will not start a daemon still gets its scan run here, and says so", async () => {
+  test("a spawn that fails still gets its scan run here, and says so", async () => {
     const { project, sessionDir, agentDir } = await projectWithSession();
     const paths = distillPaths(project);
     await setupProject(project);
 
     const { api, commands } = harness({ evaluate: true, agentDir });
     distillExtension(api);
-    // The broker unreachable is not the operator's problem to solve: the scan runs where it is.
+    // A spawn that fails is not the operator's problem to solve: the scan runs where it is.
     __setScanSpawnForTests(async () => {
       throw new Error("spawn ENOENT");
     });

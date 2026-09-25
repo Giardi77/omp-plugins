@@ -95,8 +95,8 @@ headless approve or deny path. `PgUp`/`PgDn` scroll the pane when a lesson is lo
 left for it. The window borrows the alternate screen while it is open and leaves mouse reporting off,
 so click-and-drag still selects text.
 
-A change is one of three shapes: a `create` of a file that does not exist, an `append` with the
-file's own tail as context, or a `trim` marking the lines going out. Only an approval writes, and
+A change takes one of three shapes — a new file, an append against the file's own tail, or a trim of
+lines it already has (`create`, `append` and `splice` in the code). Only an approval writes, and
 only into the project's own surfaces:
 
 ```text
@@ -113,9 +113,10 @@ added to.
 ## What the evaluator gets
 
 An **inventory** of the session's traces — id, record range, size, transcript file — and no records.
-It reads the records itself with `get_trace`: a section at a time, by range, by pattern, or with a
-`jq` query. Sections render prompts, assistant text and tool calls in full (capped per record); tool
-results as their first line plus size. Cited evidence is re-extracted verbatim from the full record.
+It reads the records itself with `get_trace`: a section at a time, by range, or by pattern; a `jq`
+query works when `jq` is on `PATH`, and is refused with a range-or-pattern suggestion when it is not.
+Sections render prompts, assistant text and tool calls in full (capped per record); tool results as
+their first line plus size. Cited evidence is re-extracted verbatim from the full record.
 
 `tasks_completed` is refused until every trace has been read to its last record (ADR-0017): a run
 that goes quiet is an unfinished one. Nothing is ever truncated — a payload the model refuses fails
@@ -126,9 +127,10 @@ under `tmp/`.
 
 `/distill scan` resolves which sessions are eligible, writes that list as a journal
 (`tmp/scan.json`), and spawns a detached `omp -p "/distill _job"` that outlives the OMP that started
-it. The host has a broker that would do the spawning, but its client subpath does not resolve from a
-marketplace-installed plugin, so the plugin owns the spawn (ADR-0014, ADR-0011) — which means a scan
-is not in `omp ps`, and `/distill status` is where its state is read.
+it. Each session in it is one model call, which `--limit` bounds. The host has a broker that would do
+the spawning, but its client subpath does not resolve from a marketplace-installed plugin, so the
+plugin owns the spawn (ADR-0014, ADR-0011) — which means a scan is not in `omp ps`, and
+`/distill status` is where its state is read.
 
 Division of truth: the **scan lock** — an OS lease released when its holder dies — says whether a
 scan is running, and the **journal** says what it has done. A scan that dies unfinished reads as
