@@ -51,6 +51,17 @@ next capability load (a rule or extension reappearing after a scan), and those t
 exists rather than what a session is told. A host without `Settings.loadReadOnly` is refused with
 that reason rather than failing the scan with a `TypeError`.
 
+**Amended 2026-09-25**: the three keys ride across only where the host still has
+`Settings.get(path)`, because that read is probed for rather than assumed. omp 18.3.1 removed it —
+the instance is a layered store with `rawValue`, `overlay` and typed accessors, and the capability
+getters are not on the package's public surface — so on that host the scan read a shape that was no
+longer there, and every evaluation died in `evaluatorSettings` before a session existed. Nothing is
+lost by carrying nothing there: 18.3.1 binds process state only for a session that is *top-level*
+(`bindProcessState`, false for anything carrying `parentTaskPrefix` or `taskDepth`), and the
+evaluator carries `parentTaskPrefix`, so its settings instance never displaces the project's view of
+those switches. 17.4.0 through 18.3.0 call `initializeWithSettings` unconditionally, which is why
+the carry-over stays rather than being deleted: the shape decides, not the version.
+
 Verified on omp 18.3.0 against a project whose settings enable
 an advisor: the evaluator reports `isAdvisorEnabled() === false`, and its composed system prompt is
 byte-identical to the shipped `templates/evaluator.md` while a canary string placed in the project's

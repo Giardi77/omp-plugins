@@ -53,3 +53,20 @@ capture, stop, restart and recovery of detached records across broker restarts, 
 would be four files of supervision code to maintain; hand the scan to the host's in-process
 `AsyncJobManager` (the one behind `ctx.getAsyncJobSnapshot()`) — rejected, the extension surface is
 read-only there and the manager dies with the host, which is the problem being solved.
+
+**Amended 2026-09-25**: the broker half of this did not survive contact with an installed plugin.
+`@oh-my-pi/pi-coding-agent/launch/client` does not resolve from a marketplace install and the package
+root does not export it — the same wall ADR-0011 recorded for two other subpaths — so the plugin owns
+the spawn after all: `Bun.spawn({ detached: true })` plus `unref()`, which is all the broker gave it
+here (ADR-0011's rule is why the forty lines are cheaper than the dependency). Nothing else moved:
+the journal, the scan lock and the cancel request are unchanged, and a scan therefore appears in no
+`omp ps`.
+
+**Amended 2026-09-25 (the spawn's argv is load-bearing)**: the runner is started as
+`omp -p --no-session "/distill _job"`, and `--no-session` is not tidiness. Without it the host
+attaches the print run to the project's newest session and appends a `session_exit` marker to it on
+the way out — verified both ways in a scratch project, where a plain `omp -p "/distill status"` grew
+the newest session's file from 825 to 1032 bytes and the same run with `--no-session` left it alone.
+A scan would then be the one thing that writes to the store ADR-0006 calls read-only input, once per
+scan, in the background where nobody sees it. The runner reads its journal rather than the store, so
+it needs no session of its own.
