@@ -126,11 +126,11 @@ under `tmp/`.
 ## A scan is a background process
 
 `/distill scan` resolves which sessions are eligible, writes that list as a journal
-(`tmp/scan.json`), and spawns a detached `omp -p "/distill _job"` that outlives the OMP that started
-it. Each session in it is one model call, which `--limit` bounds. The host has a broker that would do
-the spawning, but its client subpath does not resolve from a marketplace-installed plugin, so the
-plugin owns the spawn (ADR-0014, ADR-0011) — which means a scan is not in `omp ps`, and
-`/distill status` is where its state is read.
+(`tmp/scan.json`), and spawns a detached `omp -p --no-session "/distill _job"` that outlives the OMP
+that started it. Each session in it is one model call, which `--limit` bounds. The host has a broker
+that would do the spawning, but its client subpath does not resolve from a marketplace-installed
+plugin, so the plugin owns the spawn (ADR-0014, ADR-0011) — which means a scan is not in `omp ps`,
+and `/distill status` is where its state is read.
 
 Division of truth: the **scan lock** — an OS lease released when its holder dies — says whether a
 scan is running, and the **journal** says what it has done. A scan that dies unfinished reads as

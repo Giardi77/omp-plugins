@@ -232,8 +232,9 @@ describe("starting a scan", () => {
 
     expect(started).toMatchObject({ ok: true, pid: 4242 });
     expect(plans).toHaveLength(1);
-    // The command is the daemon's entry point: a print run of `_job`, in the project, detached.
-    expect(plans[0]?.command.slice(1)).toEqual(["-p", "/distill _job"]);
+    // The command is the runner's entry point: a print run of `_job`, in the project, detached,
+    // and --no-session so the host never attaches it to the project's own newest session.
+    expect(plans[0]?.command.slice(1)).toEqual(["-p", "--no-session", "/distill _job"]);
     expect(plans[0]?.command[0]).toContain("omp");
     expect(plans[0]?.cwd).toBe(distilled.projectRoot);
     expect(plans[0]?.logPath).toContain(".omp/distill/tmp/scan.log");

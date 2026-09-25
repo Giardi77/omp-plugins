@@ -146,9 +146,12 @@ export async function startScanJob(paths: DistillPaths, job: ScanJob): Promise<S
   if (!runtime) return { ok: false, reason: "the omp executable is not on PATH" };
   const logPath = scanLogPath(paths);
   try {
-    // A command-only print run: no TUI, no session in the store, and it exits when the scan does.
+    // A command-only print run: no TUI, no session, and it exits when the scan does. `--no-session`
+    // is load-bearing rather than tidy: without it the host attaches the run to the project's newest
+    // session, and `omp -p` appends a `session_exit` record to it on the way out — the store is
+    // read-only input (ADR-0006), and a scan would be the one thing that writes to it.
     const spawned = await (spawnerOverride ?? spawnDetached)({
-      command: [runtime, "-p", "/distill _job"],
+      command: [runtime, "-p", "--no-session", "/distill _job"],
       cwd: paths.projectRoot,
       logPath,
     });

@@ -16,8 +16,8 @@ const SESSION_ID = "aaaa1111-2222-7000-8000-000000000060";
 const RECORD_ID = "50000001";
 
 /**
- * A stand-in for the spawn: the real one starts an `omp -p "/distill _job"` process, which a test
- * must never do — it would leave a scan running on the machine running the suite.
+ * A stand-in for the spawn: the real one starts an `omp -p --no-session "/distill _job"` process,
+ * which a test must never do — it would leave a scan running on the machine running the suite.
  */
 function fakeSpawn(): { spawn: (plan: ScanSpawnPlan) => Promise<{ pid?: number }>; plans: ScanSpawnPlan[] } {
   const plans: ScanSpawnPlan[] = [];
@@ -405,7 +405,7 @@ describe("the distill command", () => {
     expect(scan.plans).toHaveLength(1);
     // The plan is the contract with the spawner; that the child is detached and unref'd is proven
     // live (a scan that outlives the process which started it), not here.
-    expect(scan.plans[0]?.command.slice(1)).toEqual(["-p", "/distill _job"]);
+    expect(scan.plans[0]?.command.slice(1)).toEqual(["-p", "--no-session", "/distill _job"]);
     expect(scan.plans[0]?.command[0]).toContain("omp");
     expect(scan.plans[0]?.cwd).toBe(project);
     expect(scan.plans[0]?.logPath).toContain(".omp/distill/tmp/scan.log");
