@@ -135,6 +135,8 @@ export const PROPOSE_LESSONS_DESCRIPTION = [
   `- \`append_system\` — something permanent the main agent must always respect. \`target\` is`,
   `  "${APPEND_SYSTEM_TARGET}". It rides every request in this project, so reserve it for the few`,
   `  instructions that must never be missed; anything occasional belongs in a skill or a rule.`,
+  `AGENTS.md is not a target, and neither is anything else the host reads on its own: when the lesson`,
+  `belongs in one of those files, name the file and why in \`rationale\` instead of proposing it.`,
   ``,
   `Before proposing anything, read .omp/distill/lessons/ — a lesson already denied for the same proposal must not be proposed again.`,
 ].join("\n");

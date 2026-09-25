@@ -33,7 +33,9 @@ session, under which prompt. Provenance belongs where it is asked for, not in th
 `interruptMode` joined the writable keys (ADR-0019). The shipped `evaluator.md` now names the host's
 rule frontmatter keys, because the operator wants the vocabulary where the writing happens — the
 grammar, the composition rules and the refusals stay in the tool description (D15), so the prompt can be
-rewritten by whoever owns the project without changing what the plugin accepts.
+rewritten by whoever owns the project without changing what the plugin accepts. The prompt also states
+where each surface's text actually lands — injected into every request, listed as a path to read later,
+or loaded when a description matches — because that is what decides which surface a lesson belongs in.
 
 **Considered Options**: teaching the model the raw frontmatter and letting it write whole files —
 rejected, the plugin would be validating model-authored YAML for no gain, and the review window

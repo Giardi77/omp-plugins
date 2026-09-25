@@ -29,7 +29,7 @@
     {
       "name": "omp-distill-extension",
       "description": "Turn recorded OMP sessions into reviewed project knowledge.",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "source": "./distill",
       "author": {
         "name": "Giardi77"
